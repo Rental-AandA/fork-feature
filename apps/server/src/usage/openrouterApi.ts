@@ -50,6 +50,7 @@ export const makeOpenRouterApi = Effect.gen(function* () {
       url: `${OPENROUTER_API}/key`,
       headers: { authorization: `Bearer ${config.apiKey}` },
     }).pipe(Effect.flatMap(decodeSourceJson(KeyInfo, "OpenRouter")));
+    // The balance is extra: a refused or failing management key leaves the key's own spend.
     const credits =
       config.managementKey.length === 0
         ? null
@@ -61,12 +62,12 @@ export const makeOpenRouterApi = Effect.gen(function* () {
               status === 401 || status === 403
                 ? `OpenRouter refused the management key (HTTP ${status}).`
                 : undefined,
-          }).pipe(Effect.flatMap(decodeSourceJson(Credits, "OpenRouter")));
+          }).pipe(Effect.flatMap(decodeSourceJson(Credits, "OpenRouter")), Effect.result);
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
 
     const windows: ServerProviderUsageWindow[] = [];
-    if (credits) {
-      const { total_credits: total, total_usage: used } = credits.data;
+    if (credits?._tag === "Success") {
+      const { total_credits: total, total_usage: used } = credits.success.data;
       windows.push({
         id: "credits",
         kind: "other",
@@ -103,6 +104,9 @@ export const makeOpenRouterApi = Effect.gen(function* () {
           checkedAt,
           windows,
           ...(Object.keys(spend).length > 0 ? { spend: { currency: "USD", ...spend } } : {}),
+          ...(credits?._tag === "Failure"
+            ? { notice: `Account balance unavailable: ${credits.failure.detail}` }
+            : {}),
         },
       },
     ];

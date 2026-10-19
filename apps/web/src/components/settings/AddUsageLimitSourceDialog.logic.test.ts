@@ -57,4 +57,14 @@ describe("usageSourceConfig", () => {
     expect(usageSourceConfig(draft({ kind: "typesafe", startCredit: "-5" }))).toBeNull();
     expect(usageSourceConfig(draft({ kind: "typesafe", startCredit: "ten" }))).toBeNull();
   });
+
+  it("lets Higgsfield connect without a key, leaving credentials to the sign-in", () => {
+    expect(usageSourceConfig(draft({ kind: "higgsfield", label: "Studio" }))).toEqual({
+      kind: "higgsfield",
+      label: "Studio",
+      clientId: "",
+      refreshToken: "",
+      enabled: true,
+    });
+  });
 });

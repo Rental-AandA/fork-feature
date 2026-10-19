@@ -6,6 +6,7 @@ import {
   DeepSeekUsageLimitSourceConfig,
   ElevenLabsUsageLimitSourceConfig,
   FalUsageLimitSourceConfig,
+  HiggsfieldUsageLimitSourceConfig,
   OpenRouterUsageLimitSourceConfig,
   type ServerSettings,
   secretSettingsFields,
@@ -40,6 +41,7 @@ const usageLimitSecretFields = new Map<string, ReadonlyArray<string>>([
   ["fal", secretSettingsFields(FalUsageLimitSourceConfig)],
   ["deepseek", secretSettingsFields(DeepSeekUsageLimitSourceConfig)],
   ["openrouter", secretSettingsFields(OpenRouterUsageLimitSourceConfig)],
+  ["higgsfield", secretSettingsFields(HiggsfieldUsageLimitSourceConfig)],
 ]);
 const encode = (value: string) => Buffer.from(value, "utf8").toString("base64url");
 

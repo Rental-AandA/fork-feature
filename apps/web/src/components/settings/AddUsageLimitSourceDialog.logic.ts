@@ -13,6 +13,7 @@ export const USAGE_SOURCE_KIND_NAMES = {
   deepseek: "DeepSeek",
   openrouter: "OpenRouter",
   typesafe: "TypeSafe (Jev)",
+  higgsfield: "Higgsfield",
 } as const satisfies Record<UsageLimitSourceKind, string>;
 
 export const isUsageSourceKind = (value: unknown): value is UsageLimitSourceKind =>
@@ -101,6 +102,9 @@ export function usageSourceConfig(draft: UsageSourceDraft): UsageLimitSourceConf
         : null;
     case "canva":
       return { kind: draft.kind, ...base };
+    // Signing in fills these; the dialog connects instead of saving this config.
+    case "higgsfield":
+      return { kind: draft.kind, ...base, clientId: "", refreshToken: "" };
     case "typesafe": {
       const startCredit = parseStartCredit(draft.startCredit);
       const startDate = draft.startDate.trim();

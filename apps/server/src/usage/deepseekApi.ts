@@ -58,45 +58,46 @@ export const makeDeepSeekApi = Effect.gen(function* () {
     const spends = yield* Effect.forEach(balances, ({ currency, amount }) =>
       recordBalance(currency, amount),
     );
-    if (balances.length === 0 || body.is_available === false) {
+    if (balances.length === 0) {
       return [
         {
           ...account,
           usageLimits: makeUnavailableUsageLimits({
             checkedAt,
             reason: "probeFailed",
-            message:
-              balances.length === 0
-                ? "DeepSeek reported no balance."
-                : "DeepSeek says the balance is too low for API calls.",
+            message: "DeepSeek reported no balance.",
           }),
         },
       ];
     }
-    // The spend field carries one currency; accounts normally hold only one.
+    const spendOf = (index: number) => {
+      const spend = spends[index];
+      return spend ? { day: spend.day, month: spend.month } : undefined;
+    };
+    // Each currency's spend rides on its own window; the account-level field keeps the first
+    // for clients that predate per-window spend.
     const [first] = balances;
-    const [firstSpend] = spends;
+    const firstSpend = spendOf(0);
     return [
       {
         ...account,
         usageLimits: {
           checkedAt,
-          windows: balances.map(({ currency, amount }) => ({
-            id: `balance-${currency}`,
-            kind: "other" as const,
-            label: `Balance (${currency})`,
-            usedPercent: 0,
-            remaining: nonNegative(amount),
-            unit: currency,
-          })),
-          ...(first && firstSpend
-            ? {
-                spend: {
-                  currency: first.currency,
-                  day: firstSpend.day,
-                  month: firstSpend.month,
-                },
-              }
+          windows: balances.map(({ currency, amount }, index) => {
+            const spend = spendOf(index);
+            return {
+              id: `balance-${currency}`,
+              kind: "other" as const,
+              label: `Balance (${currency})`,
+              usedPercent: 0,
+              remaining: nonNegative(amount),
+              unit: currency,
+              ...(spend ? { spend } : {}),
+            };
+          }),
+          ...(first && firstSpend ? { spend: { currency: first.currency, ...firstSpend } } : {}),
+          ...(body.is_available === false
+            ? { notice: "The balance is too low for API calls." }
             : {}),
         },
       },

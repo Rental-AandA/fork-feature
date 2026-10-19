@@ -32,6 +32,7 @@ import { makeCliproxyApi } from "./cliproxyApi.ts";
 import { makeDeepSeekApi } from "./deepseekApi.ts";
 import { makeElevenLabsApi } from "./elevenlabsApi.ts";
 import { makeFalApi } from "./falApi.ts";
+import { makeHiggsfieldApi, type SaveRefreshToken } from "./higgsfieldApi.ts";
 import { makeOpenRouterApi } from "./openrouterApi.ts";
 import { makeSpendHistory } from "./spendHistory.ts";
 
@@ -57,6 +58,7 @@ const KIND_LABELS = {
   deepseek: "DeepSeek",
   openrouter: "OpenRouter",
   typesafe: "Jev",
+  higgsfield: "Higgsfield",
 } as const satisfies Record<Exclude<UsageLimitSourceKind, "cliproxy">, string>;
 
 type SourceReader<K extends UsageLimitSourceKind> = (
@@ -129,6 +131,7 @@ export const make = Effect.gen(function* () {
   const fal = yield* makeFalApi;
   const deepseek = yield* makeDeepSeekApi;
   const openrouter = yield* makeOpenRouterApi;
+  const higgsfield = yield* makeHiggsfieldApi;
   const spendHistory = yield* makeSpendHistory(
     (yield* Path.Path).join((yield* ServerConfig).stateDir, "usage-spend.json"),
   );
@@ -139,6 +142,28 @@ export const make = Effect.gen(function* () {
     PubSub.unbounded<ReadonlyArray<UsageLimitSourceSnapshot>>(),
     PubSub.shutdown,
   );
+
+  // Compares before writing so a reconnect that landed meanwhile is never overwritten.
+  const saveHiggsfieldToken =
+    (id: UsageLimitSourceId): SaveRefreshToken =>
+    (previous, next) =>
+      Effect.gen(function* () {
+        const settings = yield* settingsService.getSettings;
+        const source = settings.usageLimitSources[id];
+        if (source?.kind !== "higgsfield" || source.refreshToken !== previous) return false;
+        yield* settingsService.updateSettings({
+          usageLimitSources: { [id]: { ...source, refreshToken: next } },
+        });
+        return true;
+      }).pipe(
+        Effect.mapError(
+          () =>
+            new UsageLimitSourceError({
+              detail:
+                "Could not save the renewed Higgsfield sign-in. Retrying on the next refresh.",
+            }),
+        ),
+      );
 
   const readers: { readonly [K in UsageLimitSourceKind]: SourceReader<K> } = {
     cliproxy: (config) =>
@@ -163,6 +188,7 @@ export const make = Effect.gen(function* () {
         ? missingKey("No API key configured.")
         : openrouter.readAccounts(config),
     typesafe: readTypesafe,
+    higgsfield: (config, id) => higgsfield.readAccounts(id, config, saveHiggsfieldToken(id)),
   };
   const readAccounts = <K extends UsageLimitSourceKind>(
     config: Extract<UsageLimitSourceConfig, { readonly kind: K }>,

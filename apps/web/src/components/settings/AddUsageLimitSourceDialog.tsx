@@ -1,6 +1,7 @@
 import {
   ELEVENLABS_DEFAULT_BASE_URL,
   type EnvironmentId,
+  type UsageLimitSourceId,
   type UsageLimitSourceKind,
 } from "@t3tools/contracts";
 import { useState } from "react";
@@ -19,6 +20,7 @@ import {
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SecretInput } from "./SecretInput";
+import { useUsageSourceConnect } from "./useUsageSourceConnect";
 import { Label } from "../ui/label";
 import {
   EMPTY_USAGE_SOURCE_DRAFT,
@@ -37,6 +39,8 @@ const KIND_NOTES: Partial<Record<UsageLimitSourceKind, string>> = {
     "The API key shows its own spend. Add a management key to also see the account balance.",
   typesafe:
     "TypeSafe has no balance API. Jev spend is counted once winnow is connected; until then the usage page links to the console.",
+  higgsfield:
+    "Sign in with your Higgsfield account in the browser. The sign-in returns to this server, so finish it on the computer running it. The monthly allowance and reset date are estimated from your credit history.",
 };
 
 /**
@@ -57,7 +61,10 @@ export function AddUsageLimitSourceDialog({
   readonly existingIds: ReadonlySet<string>;
 }) {
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
+  const signIn = useUsageSourceConnect(environmentId);
   const [draft, setDraft] = useState<UsageSourceDraft>(EMPTY_USAGE_SOURCE_DRAFT);
+  // A sign-in creates its source on the server, so a retry must reuse that id, not add another.
+  const [signInSourceId, setSignInSourceId] = useState<UsageLimitSourceId | null>(null);
   const { kind } = draft;
   const edit =
     (field: Exclude<keyof UsageSourceDraft, "kind">) =>
@@ -65,13 +72,27 @@ export function AddUsageLimitSourceDialog({
       setDraft((current) => ({ ...current, [field]: event.target.value }));
   const config = usageSourceConfig(draft);
   const hasUrl = kind === "cliproxy" || kind === "elevenlabs";
-  const hasKey = kind !== "canva" && kind !== "typesafe";
+  const hasKey = kind !== "canva" && kind !== "typesafe" && kind !== "higgsfield";
   const note = KIND_NOTES[kind];
 
-  const reset = () => setDraft(EMPTY_USAGE_SOURCE_DRAFT);
+  const reset = () => {
+    setDraft(EMPTY_USAGE_SOURCE_DRAFT);
+    setSignInSourceId(null);
+    signIn.reset();
+  };
 
   const save = () => {
     if (!config) return;
+    if (config.kind === "higgsfield") {
+      // The server creates the source with the sign-in; the dialog stays open to guide it.
+      const sourceId = signInSourceId ?? usageSourceId(draft, existingIds);
+      setSignInSourceId(sourceId);
+      void signIn.start({
+        sourceId,
+        ...(config.label ? { label: config.label } : {}),
+      });
+      return;
+    }
     updateSettings({ usageLimitSources: { [usageSourceId(draft, existingIds)]: config } });
     reset();
     onOpenChange(false);
@@ -94,126 +115,164 @@ export function AddUsageLimitSourceDialog({
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
-          <form
-            className="grid gap-4"
-            onSubmit={(event) => {
-              event.preventDefault();
-              save();
-            }}
-          >
-            <div className="grid gap-1.5">
-              <Label htmlFor="usage-source-kind">Source</Label>
-              <Select
-                value={kind}
-                onValueChange={(value) => {
-                  if (isUsageSourceKind(value)) {
-                    setDraft((current) => ({ ...current, kind: value }));
-                  }
-                }}
-              >
-                <SelectTrigger id="usage-source-kind" aria-label="Usage source">
-                  <SelectValue>
-                    {(value: UsageLimitSourceKind) => USAGE_SOURCE_KIND_NAMES[value]}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup alignItemWithTrigger={false}>
-                  {Object.entries(USAGE_SOURCE_KIND_NAMES).map(([value, name]) => (
-                    <SelectItem key={value} value={value}>
-                      {name}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
+          {signIn.state.status === "waiting" || signIn.state.status === "failed" ? (
+            <div className="grid gap-2 text-sm">
+              {signIn.state.status === "waiting" ? (
+                <>
+                  <p className="text-foreground">
+                    Finish signing in to Higgsfield in your browser.
+                  </p>
+                  <p className="text-muted-foreground">
+                    Credits appear on the Usage page once you are signed in. You can close this
+                    dialog.
+                  </p>
+                </>
+              ) : (
+                <p className="text-destructive">{signIn.state.message}</p>
+              )}
             </div>
-            {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
-            {hasUrl ? (
+          ) : (
+            <form
+              className="grid gap-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                save();
+              }}
+            >
               <div className="grid gap-1.5">
-                <Label htmlFor="usage-source-url">
-                  {kind === "cliproxy" ? "Hub URL" : "API URL (optional)"}
-                </Label>
-                <Input
-                  id="usage-source-url"
-                  placeholder={
-                    kind === "cliproxy"
-                      ? "https://hub.example.ts.net:8318"
-                      : ELEVENLABS_DEFAULT_BASE_URL
-                  }
-                  value={draft.url}
-                  onChange={edit("url")}
-                />
+                <Label htmlFor="usage-source-kind">Source</Label>
+                <Select
+                  value={kind}
+                  onValueChange={(value) => {
+                    if (isUsageSourceKind(value)) {
+                      setDraft((current) => ({ ...current, kind: value }));
+                    }
+                  }}
+                >
+                  <SelectTrigger id="usage-source-kind" aria-label="Usage source">
+                    <SelectValue>
+                      {(value: UsageLimitSourceKind) => USAGE_SOURCE_KIND_NAMES[value]}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup alignItemWithTrigger={false}>
+                    {Object.entries(USAGE_SOURCE_KIND_NAMES).map(([value, name]) => (
+                      <SelectItem key={value} value={value}>
+                        {name}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
               </div>
-            ) : null}
-            {hasKey ? (
-              <div className="grid gap-1.5">
-                <Label htmlFor="usage-source-key">
-                  {kind === "cliproxy" ? "Management key" : "API key"}
-                </Label>
-                <SecretInput id="usage-source-key" value={draft.key} onChange={edit("key")} />
-              </div>
-            ) : null}
-            {kind === "openrouter" ? (
-              <div className="grid gap-1.5">
-                <Label htmlFor="usage-source-management-key">Management key (optional)</Label>
-                <SecretInput
-                  id="usage-source-management-key"
-                  value={draft.managementKey}
-                  onChange={edit("managementKey")}
-                />
-              </div>
-            ) : null}
-            {kind === "typesafe" ? (
-              <>
+              {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
+              {hasUrl ? (
                 <div className="grid gap-1.5">
-                  <Label htmlFor="usage-source-start-credit">
-                    Starting credit in USD (optional)
+                  <Label htmlFor="usage-source-url">
+                    {kind === "cliproxy" ? "Hub URL" : "API URL (optional)"}
                   </Label>
                   <Input
-                    id="usage-source-start-credit"
-                    inputMode="decimal"
-                    placeholder="50"
-                    value={draft.startCredit}
-                    onChange={edit("startCredit")}
+                    id="usage-source-url"
+                    placeholder={
+                      kind === "cliproxy"
+                        ? "https://hub.example.ts.net:8318"
+                        : ELEVENLABS_DEFAULT_BASE_URL
+                    }
+                    value={draft.url}
+                    onChange={edit("url")}
                   />
                 </div>
+              ) : null}
+              {hasKey ? (
                 <div className="grid gap-1.5">
-                  <Label htmlFor="usage-source-start-date">Bought on (optional)</Label>
-                  <Input
-                    id="usage-source-start-date"
-                    type="date"
-                    value={draft.startDate}
-                    onChange={edit("startDate")}
+                  <Label htmlFor="usage-source-key">
+                    {kind === "cliproxy" ? "Management key" : "API key"}
+                  </Label>
+                  <SecretInput id="usage-source-key" value={draft.key} onChange={edit("key")} />
+                </div>
+              ) : null}
+              {kind === "openrouter" ? (
+                <div className="grid gap-1.5">
+                  <Label htmlFor="usage-source-management-key">Management key (optional)</Label>
+                  <SecretInput
+                    id="usage-source-management-key"
+                    value={draft.managementKey}
+                    onChange={edit("managementKey")}
                   />
                 </div>
-              </>
-            ) : null}
-            <div className="grid gap-1.5">
-              <Label htmlFor="usage-source-label">Label (optional)</Label>
-              <Input
-                id="usage-source-label"
-                placeholder={
-                  kind === "cliproxy"
-                    ? "Defaults to the hub's host name"
-                    : USAGE_SOURCE_KIND_NAMES[kind]
-                }
-                value={draft.label}
-                onChange={edit("label")}
-              />
-            </div>
-          </form>
+              ) : null}
+              {kind === "typesafe" ? (
+                <>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="usage-source-start-credit">
+                      Starting credit in USD (optional)
+                    </Label>
+                    <Input
+                      id="usage-source-start-credit"
+                      inputMode="decimal"
+                      placeholder="50"
+                      value={draft.startCredit}
+                      onChange={edit("startCredit")}
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="usage-source-start-date">Bought on (optional)</Label>
+                    <Input
+                      id="usage-source-start-date"
+                      type="date"
+                      value={draft.startDate}
+                      onChange={edit("startDate")}
+                    />
+                  </div>
+                </>
+              ) : null}
+              <div className="grid gap-1.5">
+                <Label htmlFor="usage-source-label">Label (optional)</Label>
+                <Input
+                  id="usage-source-label"
+                  placeholder={
+                    kind === "cliproxy"
+                      ? "Defaults to the hub's host name"
+                      : USAGE_SOURCE_KIND_NAMES[kind]
+                  }
+                  value={draft.label}
+                  onChange={edit("label")}
+                />
+              </div>
+            </form>
+          )}
         </DialogPanel>
         <DialogFooter variant="bare">
-          <Button
-            variant="outline"
-            onClick={() => {
-              reset();
-              onOpenChange(false);
-            }}
-          >
-            Cancel
-          </Button>
-          <Button onClick={save} disabled={!config}>
-            Add source
-          </Button>
+          {signIn.state.status === "waiting" ? null : (
+            <Button
+              variant="outline"
+              onClick={() => {
+                reset();
+                onOpenChange(false);
+              }}
+            >
+              Cancel
+            </Button>
+          )}
+          {signIn.state.status === "waiting" ? (
+            <>
+              <Button variant="outline" onClick={signIn.reopen}>
+                Open sign-in again
+              </Button>
+              <Button
+                onClick={() => {
+                  reset();
+                  onOpenChange(false);
+                }}
+              >
+                Done
+              </Button>
+            </>
+          ) : signIn.state.status === "failed" ? (
+            <Button onClick={signIn.reset}>Back</Button>
+          ) : (
+            <Button onClick={save} disabled={!config || signIn.state.status === "starting"}>
+              {kind === "higgsfield" ? "Connect Higgsfield" : "Add source"}
+            </Button>
+          )}
         </DialogFooter>
       </DialogPopup>
     </Dialog>

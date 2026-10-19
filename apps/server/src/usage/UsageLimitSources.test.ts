@@ -326,3 +326,110 @@ it.effect("derives DeepSeek spend across refreshes and explains sources without 
     Effect.scoped,
   );
 });
+
+const higgsfieldId = UsageLimitSourceId.make("higgsfield");
+
+function higgsfieldHttp(onRefresh: (refreshToken: string) => Effect.Effect<void>) {
+  return HttpClient.make((request) =>
+    Effect.gen(function* () {
+      const body =
+        request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "";
+      if (new URL(request.url).pathname === "/oauth/token") {
+        const refreshToken = new URLSearchParams(body).get("refresh_token") ?? "";
+        yield* onRefresh(refreshToken);
+        return HttpClientResponse.fromWeb(
+          request,
+          Response.json({
+            access_token: "access",
+            refresh_token: `${refreshToken}-rotated`,
+            expires_in: 86_399,
+          }),
+        );
+      }
+      const message = JSON.parse(body) as { id?: number; params?: { name?: string } };
+      if (message.id === undefined) {
+        return HttpClientResponse.fromWeb(request, new Response(null, { status: 202 }));
+      }
+      const text =
+        message.params?.name === "balance"
+          ? "Credits: 7 | Plan: plus"
+          : JSON.stringify({ items: [], next_cursor: null });
+      return HttpClientResponse.fromWeb(
+        request,
+        Response.json({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: { content: [{ type: "text", text }] },
+        }),
+      );
+    }),
+  );
+}
+
+const higgsfieldLayers = (http: HttpClient.HttpClient) =>
+  Layer.mergeAll(
+    ServerSettings.layerTest({
+      usageLimitSources: {
+        [higgsfieldId]: {
+          kind: "higgsfield",
+          clientId: "client-1",
+          refreshToken: "refresh-1",
+          enabled: true,
+        },
+      },
+    }),
+    Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+      shouldRunScopeWork: () => Effect.succeed(false),
+    }),
+    Layer.succeed(HttpClient.HttpClient, http),
+    NodeCrypto.layer,
+    stateLayer,
+  );
+
+it.effect("saves Higgsfield's rotated refresh token and shows the credits", () =>
+  Effect.gen(function* () {
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const sources = yield* UsageLimitSources.make;
+    yield* sources.refresh;
+    const stored = (yield* settings.getSettings).usageLimitSources[higgsfieldId];
+    expect(stored).toMatchObject({ kind: "higgsfield", refreshToken: "refresh-1-rotated" });
+    const [snapshot] = yield* sources.current;
+    expect(snapshot?.accounts[0]).toMatchObject({
+      plan: "plus",
+      usageLimits: { windows: [{ id: "credits", remaining: 7, unit: "credits" }] },
+    });
+  }).pipe(Effect.provide(higgsfieldLayers(higgsfieldHttp(() => Effect.void))), Effect.scoped),
+);
+
+it.effect("never overwrites a Higgsfield reconnect with a stale rotation", () => {
+  let reconnect: Effect.Effect<void> = Effect.void;
+  return Effect.gen(function* () {
+    const settings = yield* ServerSettings.ServerSettingsService;
+    // The user finishes a new sign-in while the old token is being refreshed.
+    reconnect = settings
+      .updateSettings({
+        usageLimitSources: {
+          [higgsfieldId]: {
+            kind: "higgsfield",
+            clientId: "client-2",
+            refreshToken: "refresh-new-login",
+            enabled: true,
+          },
+        },
+      })
+      .pipe(Effect.orDie, Effect.asVoid);
+    const sources = yield* UsageLimitSources.make;
+    yield* sources.refresh;
+    const stored = (yield* settings.getSettings).usageLimitSources[higgsfieldId];
+    expect(stored?.kind === "higgsfield" && stored.refreshToken).toMatch(/^refresh-new-login/);
+  }).pipe(
+    Effect.provide(
+      higgsfieldLayers(
+        higgsfieldHttp((refreshToken) =>
+          refreshToken === "refresh-1" ? Effect.suspend(() => reconnect) : Effect.void,
+        ),
+      ),
+    ),
+    Effect.scoped,
+  );
+});

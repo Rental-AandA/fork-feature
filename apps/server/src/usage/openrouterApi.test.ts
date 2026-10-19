@@ -102,15 +102,19 @@ describe("OpenRouter balance and spend", () => {
     }),
   );
 
-  it.effect("names a refused management key apart from a refused API key", () =>
+  it.effect("keeps the key's spend and warns when the management key is refused", () =>
     Effect.gen(function* () {
       const refusedManagement = openrouterAnswering((path) =>
         path.endsWith("/credits") ? { status: 403, body: {} } : { body: keyInfo },
       );
-      const management = yield* Effect.flip(
-        (yield* refusedManagement.api).readAccounts({ ...config, managementKey: "wrong" }),
+      const [account] = yield* (yield* refusedManagement.api).readAccounts({
+        ...config,
+        managementKey: "wrong",
+      });
+      expect(account?.usageLimits.spend).toMatchObject({ currency: "USD", month: 7.1 });
+      expect(account?.usageLimits.notice).toBe(
+        "Account balance unavailable: OpenRouter refused the management key (HTTP 403).",
       );
-      expect(management.detail).toBe("OpenRouter refused the management key (HTTP 403).");
 
       const refusedKey = openrouterAnswering(() => ({ status: 401, body: {} }));
       const key = yield* Effect.flip((yield* refusedKey.api).readAccounts(config));

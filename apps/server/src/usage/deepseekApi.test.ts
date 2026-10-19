@@ -24,11 +24,11 @@ const recorded: Array<readonly [string, number]> = [];
 const recordBalance = (currency: string, balance: number) =>
   Effect.sync(() => {
     recorded.push([currency, balance]);
-    return { day: 1.25, month: 4 };
+    return currency === "USD" ? { day: 0.1, month: 0.5 } : { day: 1.25, month: 4 };
   });
 
 describe("DeepSeek balance", () => {
-  it.effect("parses string amounts into one window per currency with derived spend", () =>
+  it.effect("parses string amounts into one window per currency with its own spend", () =>
     Effect.gen(function* () {
       recorded.length = 0;
       const { api, requests } = deepseekAnswering(200, {
@@ -55,6 +55,7 @@ describe("DeepSeek balance", () => {
           usedPercent: 0,
           remaining: 110,
           unit: "CNY",
+          spend: { day: 1.25, month: 4 },
         },
         {
           id: "balance-USD",
@@ -63,24 +64,24 @@ describe("DeepSeek balance", () => {
           usedPercent: 0,
           remaining: 2.5,
           unit: "USD",
+          spend: { day: 0.1, month: 0.5 },
         },
       ]);
+      // Older clients read only the account-level spend, which keeps the first currency.
       expect(account?.usageLimits.spend).toEqual({ currency: "CNY", day: 1.25, month: 4 });
     }),
   );
 
-  it.effect("says when the balance no longer covers API calls", () =>
+  it.effect("keeps the balance and warns when it no longer covers API calls", () =>
     Effect.gen(function* () {
       const { api } = deepseekAnswering(200, {
         is_available: false,
-        balance_infos: [{ currency: "USD", total_balance: "0.00" }],
+        balance_infos: [{ currency: "USD", total_balance: "0.03" }],
       });
       const [account] = yield* (yield* api).readAccounts(config, recordBalance);
-      expect(account?.usageLimits.windows).toEqual([]);
-      expect(account?.usageLimits.unavailable).toEqual({
-        reason: "probeFailed",
-        message: "DeepSeek says the balance is too low for API calls.",
-      });
+      expect(account?.usageLimits.windows.map((window) => window.remaining)).toEqual([0.03]);
+      expect(account?.usageLimits.unavailable).toBeUndefined();
+      expect(account?.usageLimits.notice).toBe("The balance is too low for API calls.");
     }),
   );
 

@@ -45,7 +45,16 @@ describe("UsageLimitSourceSnapshots kinds", () => {
   });
 
   it("keeps known source kinds and drops kinds a newer server added", () => {
-    const kinds = ["cliproxy", "elevenlabs", "canva", "fal", "deepseek", "openrouter", "typesafe"];
+    const kinds = [
+      "cliproxy",
+      "elevenlabs",
+      "canva",
+      "fal",
+      "deepseek",
+      "openrouter",
+      "typesafe",
+      "higgsfield",
+    ];
     const decoded = decodeSnapshots([...kinds, "future"].map((kind) => snapshot(kind)));
     expect(decoded.map((source) => source.kind)).toEqual(kinds);
   });
@@ -64,5 +73,27 @@ describe("ServerProviderUsageLimits spend", () => {
 
   it.each([{ day: -1 }, { month: "7.10" }, { currency: "" }])("rejects spend %o", (invalid) => {
     expect(() => decodeLimits({ ...limits, spend: { currency: "USD", ...invalid } })).toThrow();
+  });
+});
+
+describe("ServerProviderUsageLimits per-currency spend and notices", () => {
+  const limits = { checkedAt: "2026-10-20T00:00:00.000Z", windows: [] };
+
+  it("decodes window spend, estimated allowances and a notice next to the windows", () => {
+    const decoded = decodeLimits({
+      ...limits,
+      windows: [
+        { ...window, unit: "CNY", remaining: 10, spend: { day: 1, month: 3 } },
+        { ...window, id: "credits", remaining: 4, limit: 100, unit: "credits", estimated: true },
+      ],
+      notice: "The balance is too low for API calls.",
+    });
+    expect(decoded.windows[0]?.spend).toEqual({ day: 1, month: 3 });
+    expect(decoded.windows[1]?.estimated).toBe(true);
+    expect(decoded.notice).toBe("The balance is too low for API calls.");
+  });
+
+  it("rejects negative window spend", () => {
+    expect(() => decodeWindow({ ...window, spend: { day: -1 } })).toThrow();
   });
 });

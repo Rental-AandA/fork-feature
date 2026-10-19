@@ -11,6 +11,13 @@ import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
 
 const NonNegativeAmount = Schema.Number.check(Schema.isGreaterThanOrEqualTo(0));
 
+/** Money spent in the current UTC day, week and month. */
+const SpendPeriods = {
+  day: Schema.optional(NonNegativeAmount),
+  week: Schema.optional(NonNegativeAmount),
+  month: Schema.optional(NonNegativeAmount),
+};
+
 /**
  * `id` is stable per provider (`five_hour`, `seven_day_opus`, `primary`) so a
  * sparse turn-driven update lands on the same row a full probe produced.
@@ -30,6 +37,13 @@ export const ServerProviderUsageWindow = Schema.Struct({
   remaining: Schema.optional(NonNegativeAmount),
   limit: Schema.optional(NonNegativeAmount),
   unit: Schema.optional(TrimmedNonEmptyString),
+  /** The service reports only what is left; `limit` and `resetsAt` are inferred from its history. */
+  estimated: Schema.optional(Schema.Boolean),
+  /**
+   * Spend in this money window's currency. Lets an account holding several currencies report
+   * each one; the account-level `spend` still carries the first for older clients.
+   */
+  spend: Schema.optional(Schema.Struct(SpendPeriods)),
 });
 export type ServerProviderUsageWindow = typeof ServerProviderUsageWindow.Type;
 
@@ -64,14 +78,9 @@ export const ServerProviderUsageLimits = Schema.Struct({
     }),
   ),
   /** Money spent in the current UTC day, week and month, for sources that report or derive it. */
-  spend: Schema.optional(
-    Schema.Struct({
-      currency: TrimmedNonEmptyString,
-      day: Schema.optional(NonNegativeAmount),
-      week: Schema.optional(NonNegativeAmount),
-      month: Schema.optional(NonNegativeAmount),
-    }),
-  ),
+  spend: Schema.optional(Schema.Struct({ currency: TrimmedNonEmptyString, ...SpendPeriods })),
+  /** A warning shown next to the windows, unlike `unavailable`, which replaces them. */
+  notice: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerProviderUsageLimits = typeof ServerProviderUsageLimits.Type;
 
@@ -105,6 +114,7 @@ export const UsageLimitSourceSnapshot = Schema.Struct({
     "deepseek",
     "openrouter",
     "typesafe",
+    "higgsfield",
   ]),
   label: TrimmedNonEmptyString,
   checkedAt: IsoDateTime,
@@ -123,6 +133,19 @@ export const UsageLimitSourceConsumeResetCreditInput = Schema.Struct({
 });
 export type UsageLimitSourceConsumeResetCreditInput =
   typeof UsageLimitSourceConsumeResetCreditInput.Type;
+
+export const UsageLimitSourceConnectInput = Schema.Struct({
+  sourceId: UsageLimitSourceId,
+  /** Used only when the source does not exist yet and connecting creates it. */
+  label: Schema.optional(TrimmedNonEmptyString),
+});
+export type UsageLimitSourceConnectInput = typeof UsageLimitSourceConnectInput.Type;
+
+export const UsageLimitSourceConnectResult = Schema.Struct({
+  /** Opened in the user's browser; the sign-in returns to this server's loopback address. */
+  authorizeUrl: TrimmedNonEmptyString,
+});
+export type UsageLimitSourceConnectResult = typeof UsageLimitSourceConnectResult.Type;
 
 export const ProviderConsumeResetCreditInput = Schema.Union([
   Schema.Struct({ instanceId: ProviderInstanceId }),

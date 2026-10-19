@@ -341,6 +341,14 @@ export function collectLimitNotices(presentations: LimitPresentations): readonly
         const subject = name === source.label ? source.label : `${source.label} · ${name}`;
         notices.push(`${label(environmentLabel, subject)}: ${notice}`);
       }
+      // A warning that accompanies data the account still shows.
+      for (const account of source.accounts) {
+        const notice = account.usageLimits.notice;
+        if (notice === undefined || account.usageLimits.unavailable !== undefined) continue;
+        const name = sourceAccountName(account);
+        const subject = name === source.label ? source.label : `${source.label} · ${name}`;
+        notices.push(`${label(environmentLabel, subject)}: ${notice}`);
+      }
     }
   }
   return notices;
@@ -409,8 +417,8 @@ export function collectLimitPools(
 ): readonly LimitPool[] {
   const byDriver = new Map<ServerProvider["driver"], LimitAccount[]>();
   for (const reported of accounts) {
-    // Money has no shared scale with quota percentages; collectMoneyAccounts shows it.
-    const windows = reported.limits.windows.filter((window) => !isMoneyWindow(window));
+    // Amounts have no shared scale with quota percentages; collectMoneyAccounts shows them.
+    const windows = reported.limits.windows.filter((window) => !isAmountWindow(window));
     if (windows.length === 0) continue;
     const account =
       windows.length === reported.limits.windows.length
@@ -607,26 +615,74 @@ export function formatMoney(amount: number, currency: string): string {
   }
 }
 
-/** Balance and spend in one line, such as "$12.40 left · today $0.80 · month $7.10". */
-export function moneySummary(limits: ServerProviderUsageLimits): string | null {
-  const parts = limits.windows.flatMap((window) => {
-    if (!isMoneyWindow(window) || window.remaining === undefined) return [];
-    const left = formatMoney(window.remaining, window.unit!);
-    return [
-      window.limit === undefined
-        ? `${left} left`
-        : `${left} of ${formatMoney(window.limit, window.unit!)} left`,
-    ];
-  });
-  const spend = limits.spend;
-  if (spend) {
-    for (const [period, amount] of [
+/**
+ * Shown as an amount rather than a percentage bar: money, a balance without a known allowance,
+ * or an allowance the service does not report and that is only estimated.
+ */
+export function isAmountWindow(window: ServerProviderUsageWindow): boolean {
+  return (
+    isMoneyWindow(window) ||
+    (window.remaining !== undefined && (window.limit === undefined || window.estimated === true))
+  );
+}
+
+type SpendPeriods = Pick<NonNullable<ServerProviderUsageLimits["spend"]>, "day" | "week" | "month">;
+
+function spendParts(spend: SpendPeriods, currency: string): string[] {
+  return (
+    [
       ["today", spend.day],
       ["week", spend.week],
       ["month", spend.month],
-    ] as const) {
-      if (amount !== undefined) parts.push(`${period} ${formatMoney(amount, spend.currency)}`);
-    }
+    ] as const
+  ).flatMap(([period, amount]) =>
+    amount === undefined ? [] : [`${period} ${formatMoney(amount, currency)}`],
+  );
+}
+
+function resetDateLabel(window: ServerProviderUsageWindow): string | null {
+  if (window.resetsAt === undefined) return null;
+  const at = Date.parse(window.resetsAt);
+  if (Number.isNaN(at)) return null;
+  const date = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(at);
+  return window.estimated ? `resets ~${date} (estimated)` : `resets ${date}`;
+}
+
+function amountParts(window: ServerProviderUsageWindow): string[] {
+  if (window.remaining === undefined || window.unit === undefined) return [];
+  if (isMoneyWindow(window)) {
+    const left = formatMoney(window.remaining, window.unit);
+    return [
+      window.limit === undefined
+        ? `${left} left`
+        : `${left} of ${formatMoney(window.limit, window.unit)} left`,
+      ...(window.spend ? spendParts(window.spend, window.unit) : []),
+    ];
+  }
+  const format = (value: number) => Math.round(value).toLocaleString("en-US");
+  const unit = window.unit.charAt(0).toUpperCase() + window.unit.slice(1);
+  const reset = resetDateLabel(window);
+  return [
+    `${unit} left ${format(window.remaining)}${window.limit === undefined ? "" : ` of ${format(window.limit)}`}`,
+    ...(reset ? [reset] : []),
+  ];
+}
+
+/**
+ * Amounts and spend in one line, such as "$12.40 left · today $0.80 · month $7.10" or
+ * "Credits left 4 of 100 · resets ~Nov 3 (estimated)".
+ */
+export function moneySummary(limits: ServerProviderUsageLimits): string | null {
+  const amountWindows = limits.windows.filter(isAmountWindow);
+  const parts = amountWindows.flatMap(amountParts);
+  // Per-window spend supersedes the account-level copy older servers and clients rely on.
+  const spend = limits.spend;
+  if (spend && !amountWindows.some((window) => window.spend !== undefined)) {
+    parts.push(...spendParts(spend, spend.currency));
   }
   return parts.length > 0 ? parts.join(" · ") : null;
 }
@@ -637,7 +693,16 @@ export function collectMoneyAccounts(
 ): ReadonlyArray<{ readonly account: LimitAccount; readonly summary: string }> {
   return accounts.flatMap((account) => {
     const summary = moneySummary(account.limits);
-    return summary === null ? [] : [{ account, summary }];
+    if (summary === null) return [];
+    const plan = account.plan?.trim();
+    return [
+      {
+        account,
+        summary: plan
+          ? `${summary} · ${plan.charAt(0).toUpperCase()}${plan.slice(1)} plan`
+          : summary,
+      },
+    ];
   });
 }
 

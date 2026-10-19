@@ -848,6 +848,21 @@ export const TypesafeUsageLimitSourceConfig = Schema.Struct({
 });
 export type TypesafeUsageLimitSourceConfig = typeof TypesafeUsageLimitSourceConfig.Type;
 
+/**
+ * Higgsfield has no API key; the source signs in through OAuth and keeps the rotating refresh
+ * token. `clientRedirectUri` records the loopback address the client was registered for, since a
+ * server on another port needs a new registration.
+ */
+export const HiggsfieldUsageLimitSourceConfig = Schema.Struct({
+  kind: Schema.Literal("higgsfield"),
+  label: Schema.optional(TrimmedNonEmptyString),
+  clientId: usageLimitApiKey,
+  refreshToken: usageLimitApiKey,
+  clientRedirectUri: Schema.optional(TrimmedNonEmptyString),
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type HiggsfieldUsageLimitSourceConfig = typeof HiggsfieldUsageLimitSourceConfig.Type;
+
 export const UsageLimitSourceConfig = Schema.Union([
   CliproxyUsageLimitSourceConfig,
   ElevenLabsUsageLimitSourceConfig,
@@ -856,6 +871,7 @@ export const UsageLimitSourceConfig = Schema.Union([
   DeepSeekUsageLimitSourceConfig,
   OpenRouterUsageLimitSourceConfig,
   TypesafeUsageLimitSourceConfig,
+  HiggsfieldUsageLimitSourceConfig,
 ]);
 export type UsageLimitSourceConfig = typeof UsageLimitSourceConfig.Type;
 export type UsageLimitSourceKind = UsageLimitSourceConfig["kind"];

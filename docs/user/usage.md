@@ -144,6 +144,11 @@ environment that will connect to it; keys stay on that environment.
   management key to also see the account's remaining credits.
 - **TypeSafe (Jev)**: TypeSafe has no balance API. Optionally enter the credit you bought; Limits
   links to the TypeSafe console.
+- **Higgsfield**: choose **Connect Higgsfield** and sign in in the browser. The sign-in returns
+  to the environment's local address, so finish it on the computer running that environment.
+  Limits shows the credits left, your plan, and an estimated monthly allowance and reset date
+  (Higgsfield reports only the balance, so both are worked out from your credit history). When
+  the sign-in expires, choose **Reconnect** next to the source.
 
 Balances and spend appear under **Usage → Limits → Tools & money**. A source that cannot be read is
 listed with its error below the limits.

@@ -1313,6 +1313,74 @@ describe("money sources", () => {
     ]);
     expect(collectLimitAccounts(input).map((account) => account.key)).toEqual(["hub:fine"]);
   });
+
+  it("shows estimated Higgsfield credits with their reset and plan, not as a quota bar", () => {
+    const credits = {
+      id: "credits",
+      kind: "monthly",
+      label: "Higgsfield credits (reset estimated)",
+      usedPercent: 65,
+      remaining: 40,
+      limit: 115,
+      unit: "credits",
+      estimated: true,
+      resetsAt: "2026-11-03T10:00:00.000Z",
+    } as const;
+    const input = presentations([
+      source(
+        [
+          {
+            id: "Higgsfield",
+            driver: ProviderDriverKind.make("higgsfield"),
+            plan: "plus",
+            usageLimits: { checkedAt, windows: [credits] },
+          },
+          {
+            id: "Free",
+            driver: ProviderDriverKind.make("higgsfield"),
+            usageLimits: {
+              checkedAt,
+              windows: [{ ...credits, usedPercent: 0, limit: undefined, resetsAt: undefined }],
+            },
+          },
+        ],
+        "Higgsfield",
+      ),
+    ]);
+    const accounts = collectLimitAccounts(input);
+    expect(collectMoneyAccounts(accounts).map(({ summary }) => summary)).toEqual([
+      "Credits left 40 of 115 · resets ~Nov 3 (estimated) · Plus plan",
+      "Credits left 40",
+    ]);
+    expect(collectLimitPools(accounts, now)).toEqual([]);
+  });
+
+  it("shows spend per currency and keeps data that comes with a warning", () => {
+    const input = presentations([
+      source(
+        [
+          {
+            id: "DeepSeek",
+            driver: ProviderDriverKind.make("deepseek"),
+            usageLimits: {
+              checkedAt,
+              windows: [
+                { ...balance, id: "balance-CNY", remaining: 10, unit: "CNY", spend: { day: 1 } },
+                { ...balance, id: "balance-USD", remaining: 2.5, spend: { day: 0.2, month: 1 } },
+              ],
+              spend: { currency: "CNY", day: 1 },
+              notice: "The balance is too low for API calls.",
+            },
+          },
+        ],
+        "DeepSeek",
+      ),
+    ]);
+    expect(collectMoneyAccounts(collectLimitAccounts(input)).map(({ summary }) => summary)).toEqual(
+      ["CN¥10.00 left · today CN¥1.00 · $2.50 left · today $0.20 · month $1.00"],
+    );
+    expect(collectLimitNotices(input)).toEqual(["DeepSeek: The balance is too low for API calls."]);
+  });
 });
 
 describe("/usage-limits", () => {

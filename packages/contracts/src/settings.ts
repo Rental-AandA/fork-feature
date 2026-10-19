@@ -12,6 +12,8 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 import {
   ForwardCompatibleNullable,
   ForwardCompatibleOptional,
+  IsoDateTime,
+  NonNegativeInt,
   OmittedWhenNull,
   ProjectId,
   ThreadId,
@@ -19,6 +21,7 @@ import {
   TrimmedString,
 } from "./baseSchemas.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
+import { UsageRotationSettings, UsageRotationSettingsPatch } from "./usageRotation.ts";
 import { EnvironmentMachineKind, ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
 import {
@@ -662,6 +665,15 @@ export const ClaudeSettings = makeProviderSettingsSchema(
         providerSettingsForm: { placeholder: "~/.claude", clearWhenEmpty: "omit" },
       }),
     ),
+    sharedSessionsPath: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Shared conversations path",
+        description:
+          "Projects folder shared by all your Claude accounts, such as ~/.claude/projects. When this home's projects folder links to it, switching accounts keeps the full conversation.",
+        providerSettingsForm: { placeholder: "~/.claude/projects", clearWhenEmpty: "omit" },
+      }),
+    ),
     customModels: Schema.Array(CustomModelSetting).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
@@ -693,7 +705,7 @@ export const ClaudeSettings = makeProviderSettingsSchema(
     ),
   },
   {
-    order: ["binaryPath", "homePath", "autoCompactWindow", "launchArgs"],
+    order: ["binaryPath", "homePath", "sharedSessionsPath", "autoCompactWindow", "launchArgs"],
   },
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;
@@ -775,14 +787,119 @@ export const AntigravitySettings = makeProviderSettingsSchema(
 );
 export type AntigravitySettings = typeof AntigravitySettings.Type;
 
-export const UsageLimitSourceConfig = Schema.Struct({
+export const CliproxyUsageLimitSourceConfig = Schema.Struct({
   kind: Schema.Literal("cliproxy"),
   label: Schema.optional(TrimmedNonEmptyString),
   url: TrimmedNonEmptyString,
   managementKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("")), secretSetting),
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
+export type CliproxyUsageLimitSourceConfig = typeof CliproxyUsageLimitSourceConfig.Type;
+
+export const ELEVENLABS_DEFAULT_BASE_URL = "https://api.elevenlabs.io";
+
+export const ElevenLabsUsageLimitSourceConfig = Schema.Struct({
+  kind: Schema.Literal("elevenlabs"),
+  label: Schema.optional(TrimmedNonEmptyString),
+  apiKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("")), secretSetting),
+  baseUrl: TrimmedNonEmptyString.pipe(
+    Schema.withDecodingDefault(Effect.succeed(ELEVENLABS_DEFAULT_BASE_URL)),
+  ),
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type ElevenLabsUsageLimitSourceConfig = typeof ElevenLabsUsageLimitSourceConfig.Type;
+
+// Canva has no API for AI credits, so this source only links to its billing page.
+export const CanvaUsageLimitSourceConfig = Schema.Struct({
+  kind: Schema.Literal("canva"),
+  label: Schema.optional(TrimmedNonEmptyString),
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type CanvaUsageLimitSourceConfig = typeof CanvaUsageLimitSourceConfig.Type;
+
+const usageLimitApiKey = TrimmedString.pipe(
+  Schema.withDecodingDefault(Effect.succeed("")),
+  secretSetting,
+);
+
+/** Balance needs a key with billing permission (BILLING or FULL preset); a plain API key is refused. */
+export const FalUsageLimitSourceConfig = Schema.Struct({
+  kind: Schema.Literal("fal"),
+  label: Schema.optional(TrimmedNonEmptyString),
+  apiKey: usageLimitApiKey,
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type FalUsageLimitSourceConfig = typeof FalUsageLimitSourceConfig.Type;
+
+export const DeepSeekUsageLimitSourceConfig = Schema.Struct({
+  kind: Schema.Literal("deepseek"),
+  label: Schema.optional(TrimmedNonEmptyString),
+  apiKey: usageLimitApiKey,
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type DeepSeekUsageLimitSourceConfig = typeof DeepSeekUsageLimitSourceConfig.Type;
+
+/** The account balance needs a management key; the API key alone only reports its own spend. */
+export const OpenRouterUsageLimitSourceConfig = Schema.Struct({
+  kind: Schema.Literal("openrouter"),
+  label: Schema.optional(TrimmedNonEmptyString),
+  apiKey: usageLimitApiKey,
+  managementKey: usageLimitApiKey,
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type OpenRouterUsageLimitSourceConfig = typeof OpenRouterUsageLimitSourceConfig.Type;
+
+// TypeSafe (Jev) has no balance API; spend can only be counted locally from reported tokens.
+export const TypesafeUsageLimitSourceConfig = Schema.Struct({
+  kind: Schema.Literal("typesafe"),
+  label: Schema.optional(TrimmedNonEmptyString),
+  /** USD the user bought, entered by hand. */
+  startCredit: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
+  startDate: Schema.optional(TrimmedNonEmptyString),
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type TypesafeUsageLimitSourceConfig = typeof TypesafeUsageLimitSourceConfig.Type;
+
+/**
+ * Higgsfield has no API key; the source signs in through OAuth and keeps the rotating refresh
+ * token. `clientRedirectUri` records the loopback address the client was registered for, since a
+ * server on another port needs a new registration.
+ */
+export const HiggsfieldUsageLimitSourceConfig = Schema.Struct({
+  kind: Schema.Literal("higgsfield"),
+  label: Schema.optional(TrimmedNonEmptyString),
+  clientId: usageLimitApiKey,
+  refreshToken: usageLimitApiKey,
+  clientRedirectUri: Schema.optional(TrimmedNonEmptyString),
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type HiggsfieldUsageLimitSourceConfig = typeof HiggsfieldUsageLimitSourceConfig.Type;
+
+export const UsageLimitSourceConfig = Schema.Union([
+  CliproxyUsageLimitSourceConfig,
+  ElevenLabsUsageLimitSourceConfig,
+  CanvaUsageLimitSourceConfig,
+  FalUsageLimitSourceConfig,
+  DeepSeekUsageLimitSourceConfig,
+  OpenRouterUsageLimitSourceConfig,
+  TypesafeUsageLimitSourceConfig,
+  HiggsfieldUsageLimitSourceConfig,
+]);
 export type UsageLimitSourceConfig = typeof UsageLimitSourceConfig.Type;
+export type UsageLimitSourceKind = UsageLimitSourceConfig["kind"];
+
+/**
+ * A plan perk the user tracks by hand, such as free generations or an unlimited model that ends
+ * on a date. Services rarely expose these, so they live in settings rather than in a source.
+ */
+export const UsageExtra = Schema.Struct({
+  service: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  /** What is left, when the perk is counted; unlimited perks leave it out. */
+  remaining: Schema.optional(NonNegativeInt),
+  expiresAt: IsoDateTime,
+});
+export type UsageExtra = typeof UsageExtra.Type;
 
 export const GitHubHost = TrimmedNonEmptyString.pipe(
   Schema.decodeTo(Schema.String, SchemaTransformation.toLowerCase()),
@@ -1136,6 +1253,7 @@ export const ServerSettings = Schema.Struct({
   ),
   snoozeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   autoResumeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  usageRotation: UsageRotationSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   sidebarAutoSettleKeepPullRequests: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
@@ -1238,6 +1356,10 @@ export const ServerSettings = Schema.Struct({
   ),
   cursorKeychainUsageEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  // Keyed by a client-made id so an edit or removal targets one perk.
+  usageExtras: Schema.Record(TrimmedNonEmptyString, UsageExtra).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
   ),
 
   usagePriceOverrides: Schema.Record(TrimmedNonEmptyString, UsageModelPriceOverride).pipe(
@@ -1443,6 +1565,7 @@ export const ServerSettingsPatch = Schema.Struct({
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   autoResumeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
+  usageRotation: Schema.optionalKey(UsageRotationSettingsPatch),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({
       schemaVersion: Schema.optionalKey(Schema.Literal(1)),
@@ -1500,6 +1623,8 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Record(UsageLimitSourceId, Schema.NullOr(UsageLimitSourceConfig)),
   ),
   cursorKeychainUsageEnabled: Schema.optionalKey(Schema.Boolean),
+  // Per entry like `usageLimitSources`: `null` removes one perk.
+  usageExtras: Schema.optionalKey(Schema.Record(TrimmedNonEmptyString, Schema.NullOr(UsageExtra))),
 
   usagePriceOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, Schema.NullOr(UsageModelPriceOverride)),

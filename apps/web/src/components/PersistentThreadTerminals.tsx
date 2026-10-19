@@ -5,12 +5,13 @@ import {
   type ScopedThreadRef,
   type ThreadId,
 } from "@t3tools/contracts";
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { scopeProjectRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
 import { memo, useEffect, useState } from "react";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useStableCallback } from "../hooks/useStableCallback";
+import type { ContextWindowSnapshot } from "../lib/contextWindow";
 import type { TerminalContextSelection } from "../lib/terminalContext";
 import { cn } from "~/lib/utils";
 import {
@@ -21,7 +22,14 @@ import {
 import { useProject, useQuietThreadShell } from "../state/entities";
 import { useEnvironmentScope } from "../state/session";
 import { useKnownTerminalSessions } from "../state/terminalSessions";
-import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
+import {
+  drawerHeightOf,
+  drawerViewOf,
+  selectThreadTerminalUiState,
+  useTerminalUiStateStore,
+} from "../terminalUiStateStore";
+import { UsageDrawerActions, UsageDrawerBody } from "./usage/UsageDrawer";
+import { useUsageExtrasFocusStore } from "./usage/useUsageOverview";
 import { useThreadTerminalActions } from "./terminal/useThreadTerminalActions";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 
@@ -88,6 +96,8 @@ interface PersistentThreadTerminalDrawerProps {
   closeShortcutLabel: string | undefined;
   keybindings: ResolvedKeybindingsConfig;
   onAddTerminalContext: (selection: TerminalContextSelection) => void;
+  /** The active thread's context window, for the usage view; null elsewhere. */
+  contextWindow: ContextWindowSnapshot | null;
 }
 
 export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDrawer({
@@ -102,6 +112,7 @@ export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerm
   closeShortcutLabel,
   keybindings,
   onAddTerminalContext,
+  contextWindow,
 }: PersistentThreadTerminalDrawerProps) {
   const canOperateTerminal = useEnvironmentScope(threadRef.environmentId, AuthTerminalOperateScope);
   const terminalActions = useThreadTerminalActions(threadRef);
@@ -117,6 +128,8 @@ export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerm
     selectThreadTerminalUiState(state.terminalUiStateByThreadKey, threadRef),
   );
   const visible = active && terminalUiState.terminalOpen;
+  const drawerView = drawerViewOf(terminalUiState);
+  const setDrawerView = useTerminalUiStateStore((state) => state.setDrawerView);
   const knownTerminalSessions = useKnownTerminalSessions({
     environmentId: threadRef.environmentId,
     threadId,
@@ -156,6 +169,11 @@ export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerm
     (session) => session.target.terminalId,
   );
   const storeSetTerminalHeight = useTerminalUiStateStore((state) => state.setTerminalHeight);
+  const storeSetUsageHeight = useTerminalUiStateStore((state) => state.setUsageHeight);
+  // The Extras button asks for the strip at the bottom; the drawer grows to show it with the rest.
+  const extrasRequestId = useUsageExtrasFocusStore((state) =>
+    state.request?.threadKey === scopedThreadKey(threadRef) ? state.request.id : 0,
+  );
   const storeSplitTerminal = useTerminalUiStateStore((state) => state.splitTerminal);
   const storeSplitTerminalVertical = useTerminalUiStateStore(
     (state) => state.splitTerminalVertical,
@@ -201,8 +219,9 @@ export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerm
     setLocalFocusRequestId((value) => value + 1);
   };
 
-  const setTerminalHeight = (height: number) => {
-    storeSetTerminalHeight(threadRef, height);
+  const setDrawerHeight = (height: number) => {
+    if (drawerView === "usage") storeSetUsageHeight(threadRef, height);
+    else storeSetTerminalHeight(threadRef, height);
   };
 
   const launchDrawerTerminal = (place: (terminalId: string) => void) => {
@@ -266,7 +285,7 @@ export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerm
           worktreePath={effectiveWorktreePath}
           runtimeEnv={runtimeEnv}
           visible={visible}
-          height={terminalUiState.terminalHeight}
+          height={drawerHeightOf(terminalUiState)}
           // Known-session order is MRU and changes on focus; persisted store order keeps sidebar labels stable.
           terminalIds={canOperateTerminal ? terminalUiState.terminalIds : serverOrderedTerminalIds}
           activeTerminalId={terminalUiState.activeTerminalId}
@@ -283,10 +302,25 @@ export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerm
           keybindings={keybindings}
           onActiveTerminalChange={activateTerminal}
           onCloseTerminal={closeTerminal}
-          onHeightChange={setTerminalHeight}
+          onHeightChange={setDrawerHeight}
           onAddTerminalContext={handleAddTerminalContext}
           terminalLabelsById={terminalLabelsById}
           terminalLaunchLocationsById={terminalLaunchLocationsById}
+          drawerView={{
+            current: drawerView,
+            onChange: (view) => setDrawerView(threadRef, view),
+            usage:
+              visible && drawerView === "usage" ? (
+                <UsageDrawerBody
+                  threadKey={scopedThreadKey(threadRef)}
+                  threadEnvironmentId={threadRef.environmentId}
+                  threadInstanceId={serverThread?.providerInstanceId ?? null}
+                  contextWindow={contextWindow}
+                />
+              ) : null,
+            usageActions: <UsageDrawerActions />,
+            fitRequestId: extrasRequestId,
+          }}
         />
       </div>
     </div>

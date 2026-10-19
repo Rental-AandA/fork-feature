@@ -57,6 +57,16 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
 const DESKTOP_APP_ID = "com.t3tools.t3code";
+// Fork builds (--fork / T3CODE_DESKTOP_FORK) install as a separate app: their
+// own appId (NSIS uninstall GUID, AUMID), install directory (package name),
+// product name, and no update feed, so neither the official installer nor its
+// updater can replace them, and they cannot replace the official install.
+export const DESKTOP_FORK_IDENTITY = {
+  appId: "com.t3tools.t3code.feature",
+  packageName: "t3code-feature",
+  productName: "T3 Code Feature",
+  artifactPrefix: "T3-Code-Feature",
+} as const;
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
@@ -182,6 +192,7 @@ interface BuildCliInput {
   readonly mockUpdates: Option.Option<boolean>;
   readonly mockUpdateServerPort: Option.Option<number>;
   readonly wslRuntime: Option.Option<string>;
+  readonly fork?: Option.Option<boolean>;
 }
 
 function detectHostBuildPlatform(hostPlatform: string): typeof BuildPlatform.Type | undefined {
@@ -939,6 +950,7 @@ interface ResolvedBuildOptions {
   readonly mockUpdates: boolean;
   readonly mockUpdateServerPort: number | undefined;
   readonly wslRuntime: string | undefined;
+  readonly fork: boolean;
 }
 
 interface StagePackageJson {
@@ -947,6 +959,7 @@ interface StagePackageJson {
   readonly buildVersion: string;
   readonly t3codeCommitHash: string;
   readonly t3codeWebAuthn?: MacWebAuthnEntitlements;
+  readonly t3codeAppUserModelId?: string;
   readonly private: true;
   readonly packageManager: string;
   readonly description: string;
@@ -1655,6 +1668,7 @@ const BuildEnvConfig = Config.all({
   mockUpdates: Config.Boolean("T3CODE_DESKTOP_MOCK_UPDATES").pipe(Config.withDefault(false)),
   mockUpdateServerPort: Config.String("T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT").pipe(Config.option),
   wslRuntime: Config.String("T3CODE_DESKTOP_WSL_RUNTIME").pipe(Config.option),
+  fork: Config.Boolean("T3CODE_DESKTOP_FORK").pipe(Config.withDefault(false)),
 });
 
 const MockUpdateServerPortSchema = Schema.NumberFromString.check(
@@ -1762,6 +1776,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     mockUpdates,
     mockUpdateServerPort,
     wslRuntime,
+    fork: resolveBooleanFlag(input.fork ?? Option.none(), env.fork),
   } satisfies ResolvedBuildOptions;
 });
 
@@ -2669,7 +2684,8 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
   return `${trimmed.slice(0, versionSeparator)}/${trimmed.slice(versionSeparator + 1)}`;
 }
 
-export function resolveDesktopProductName(version: string): string {
+export function resolveDesktopProductName(version: string, fork = false): string {
+  if (fork) return DESKTOP_FORK_IDENTITY.productName;
   return resolveDesktopUpdateChannel(version) === "nightly"
     ? "T3 Code (Nightly)"
     : (desktopPackageJson.productName ?? "T3 Code");
@@ -2690,11 +2706,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     | undefined,
   wslRuntimeBundled = false,
   arch?: typeof BuildArch.Type,
+  fork = false,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: DESKTOP_APP_ID,
-    productName: resolveDesktopProductName(version),
-    artifactName: "T3-Code-${version}-${arch}.${ext}",
+    appId: fork ? DESKTOP_FORK_IDENTITY.appId : DESKTOP_APP_ID,
+    productName: resolveDesktopProductName(version, fork),
+    artifactName: `${fork ? DESKTOP_FORK_IDENTITY.artifactPrefix : "T3-Code"}-\${version}-\${arch}.\${ext}`,
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [
       ...DESKTOP_FILE_EXCLUSIONS,
@@ -2726,8 +2743,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   // GH_TOKEN/GITHUB_TOKEN. The staged app has no repository to resolve it
   // against, so writing update manifests then crashes on a null config.
   buildConfig.publish = null;
+  // Fork builds never get a GitHub feed: without app-update.yml the desktop
+  // updater reports "no update feed is configured" and stays disabled.
   if (!isDesktopPreviewVersion(version)) {
-    const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
+    const publishConfig = fork ? undefined : yield* resolveGitHubPublishConfig(updateChannel);
     if (publishConfig) {
       buildConfig.publish = [publishConfig];
     } else if (mockUpdates) {
@@ -2791,7 +2810,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       // Give the themed installer its own Finder volume name. Finder caches
       // DMG window backgrounds by volume name, so reusing a generic name can
       // make a newly built background look unchanged during testing.
-      title: `${resolveDesktopProductName(version)} ${version} Installer`,
+      title: `${resolveDesktopProductName(version, fork)} ${version} Installer`,
       background: `dmg/dmg-background-${updateChannel}.png`,
       window: {
         width: 640,
@@ -3741,12 +3760,17 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       ? path.join(stageAppDir, WINDOWS_SERVER_RESOURCE_SOURCE_DIR, WINDOWS_SERVER_ASAR_RESOURCE)
       : undefined;
   const stagePackageJson: StagePackageJson = {
-    name: "t3code",
+    // electron-builder derives the per-user NSIS install directory
+    // (%LOCALAPPDATA%\Programs\<name>) from this name.
+    name: options.fork ? DESKTOP_FORK_IDENTITY.packageName : "t3code",
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
     // Read by apps/desktop/src/preview/Passkeys.ts; must match the signed entitlements.
     ...(macWebAuthn ? { t3codeWebAuthn: macWebAuthn } : {}),
+    // Read by apps/desktop/src/app/DesktopAppIdentity.ts so the window's
+    // AppUserModelID matches the Start menu shortcut written by the installer.
+    ...(options.fork ? { t3codeAppUserModelId: DESKTOP_FORK_IDENTITY.appId } : {}),
     private: true,
     packageManager: rootPackageJson.packageManager,
     description:
@@ -3770,6 +3794,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         : undefined,
       bundlesWslRuntime({ platform: options.platform, runtimeArchivePath: options.wslRuntime }),
       options.arch,
+      options.fork,
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -3927,7 +3952,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (options.platform === "win") {
     yield* validateWindowsPackagedPayload({
       stageDistDir,
-      appExecutableName: `${resolveDesktopProductName(appVersion)}.exe`,
+      appExecutableName: `${resolveDesktopProductName(appVersion, options.fork)}.exe`,
       targetArch: options.arch,
       appVersion,
       expectWslRuntime: bundlesWslRuntime({
@@ -4020,6 +4045,12 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   wslRuntime: Flag.String("wsl-runtime").pipe(
     Flag.withDescription(
       "Path to the Linux CLI release archive (t3-<version>-linux-x64.tar.gz) to embed as the WSL runtime of a Windows build (env: T3CODE_DESKTOP_WSL_RUNTIME).",
+    ),
+    Flag.optional,
+  ),
+  fork: Flag.Boolean("fork").pipe(
+    Flag.withDescription(
+      "Build the fork as a separate app (T3 Code Feature): own appId, install directory and product name, no update feed (env: T3CODE_DESKTOP_FORK).",
     ),
     Flag.optional,
   ),

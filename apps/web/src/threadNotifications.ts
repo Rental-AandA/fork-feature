@@ -26,7 +26,11 @@ const TAG_HASH_MASK = 0xffffffffffffffffn;
 
 /** Windows drops toast notifications with the 73-character environment/thread tag. */
 export function threadNotificationTag(environmentId: EnvironmentId, threadId: ThreadId): string {
-  const key = `${environmentId}:${threadId}`;
+  return shortNotificationTag(`${environmentId}:${threadId}`);
+}
+
+/** A 16-character tag for any notification key, short enough for Windows. */
+export function shortNotificationTag(key: string): string {
   let hash = TAG_HASH_OFFSET_BASIS;
   for (let index = 0; index < key.length; index += 1) {
     hash ^= BigInt(key.charCodeAt(index));

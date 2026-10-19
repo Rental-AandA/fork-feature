@@ -355,7 +355,11 @@ import { type ReviewCommentContext } from "../reviewCommentContext";
 import { environmentCatalog } from "../connection/catalog";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useEnvironmentDisconnectDelay } from "../hooks/useEnvironmentDisconnectDelay";
-import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
+import {
+  drawerViewOf,
+  selectThreadTerminalUiState,
+  useTerminalUiStateStore,
+} from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { useEnvironmentQuery } from "../state/query";
 import { useEnvironmentScope } from "~/state/session";
@@ -4528,18 +4532,21 @@ export default function ChatView(props: ChatViewProps) {
     showScrollDebouncer.current.cancel();
   }, [timelineThreadReset]);
 
+  // The usage view in the drawer takes no keyboard input, so the composer keeps focus under it.
+  const terminalShown =
+    Boolean(terminalUiState.terminalOpen) && drawerViewOf(terminalUiState) === "terminal";
   useEffect(() => {
-    if (!activeThread?.id || terminalUiState.terminalOpen) return;
+    if (!activeThread?.id || terminalShown) return;
     const frame = window.requestAnimationFrame(() => {
       focusComposerStable();
     });
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [activeThread?.id, focusComposerStable, terminalUiState.terminalOpen]);
+  }, [activeThread?.id, focusComposerStable, terminalShown]);
 
   useEffect(() => {
-    if (!activeThread?.id || terminalUiState.terminalOpen || isMobileViewport) return;
+    if (!activeThread?.id || terminalShown || isMobileViewport) return;
     let frame: number | null = null;
     const onWindowFocus = () => {
       if (frame !== null) window.cancelAnimationFrame(frame);
@@ -4559,7 +4566,7 @@ export default function ChatView(props: ChatViewProps) {
       window.removeEventListener("focus", onWindowFocus);
       if (frame !== null) window.cancelAnimationFrame(frame);
     };
-  }, [activeThread?.id, focusComposerStable, isMobileViewport, terminalUiState.terminalOpen]);
+  }, [activeThread?.id, focusComposerStable, isMobileViewport, terminalShown]);
 
   useEffect(() => {
     if (!activeThread?.id) return;
@@ -8580,6 +8587,12 @@ export default function ChatView(props: ChatViewProps) {
             closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
             keybindings={keybindings}
             onAddTerminalContext={addTerminalContextToDraft}
+            // Only the shown usage view reads it, so terminal drawers skip context updates.
+            contextWindow={
+              mountedThreadKey === activeThreadKey && drawerViewOf(terminalUiState) === "usage"
+                ? activeContextWindow
+                : null
+            }
           />
         ))}
       </div>

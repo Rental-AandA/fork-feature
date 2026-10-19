@@ -1,4 +1,4 @@
-import type { EnvironmentId, UnifiedSettings } from "@t3tools/contracts";
+import { UsageLimitSourceId, type EnvironmentId, type UnifiedSettings } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { PlusIcon } from "lucide-react";
 import { useState } from "react";
@@ -18,7 +18,9 @@ import {
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { AddUsageLimitSourceDialog } from "./AddUsageLimitSourceDialog";
+import { USAGE_SOURCE_KIND_NAMES } from "./AddUsageLimitSourceDialog.logic";
 import { searchableSetting } from "./settingsSearch";
+import { useUsageSourceConnect } from "./useUsageSourceConnect";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 export function UsageProviderSettings({
@@ -67,7 +69,7 @@ export function UsageProviderSettings({
           !readOnly ? (
             <Button size="xs" variant="outline" onClick={() => setAdding(true)}>
               <PlusIcon className="size-3" aria-hidden />
-              Add hub
+              Add source
             </Button>
           ) : null
         }
@@ -88,26 +90,43 @@ export function UsageProviderSettings({
           />
         ) : null}
         {entries.length === 0 ? (
-          <SettingsRow title="No hubs configured." />
+          <SettingsRow title="No usage sources configured." />
         ) : (
           entries.map(([id, source]) => {
-            const label = source.label?.trim() || source.url;
+            const location =
+              source.kind === "cliproxy"
+                ? source.url
+                : source.kind === "elevenlabs"
+                  ? source.baseUrl
+                  : null;
+            const label = source.label?.trim() || location || USAGE_SOURCE_KIND_NAMES[source.kind];
             return (
               <SettingsRow
                 key={id}
                 title={label}
                 description={
                   <span className="break-all">
-                    CLI Proxy{source.enabled ? "" : " · Disabled"}
-                    {label !== source.url ? ` · ${source.url}` : ""}
+                    {USAGE_SOURCE_KIND_NAMES[source.kind]}
+                    {source.enabled ? "" : " · Disabled"}
+                    {source.kind === "higgsfield" && !source.refreshToken ? " · Not connected" : ""}
+                    {location && label !== location ? ` · ${location}` : ""}
                   </span>
                 }
                 control={
                   !readOnly ? (
-                    <RemoveUsageProviderButton
-                      label={label}
-                      onConfirm={() => updateSettings({ usageLimitSources: { [id]: null } })}
-                    />
+                    <span className="flex items-center gap-1">
+                      {source.kind === "higgsfield" ? (
+                        <ConnectUsageSourceButton
+                          environmentId={environmentId}
+                          sourceId={UsageLimitSourceId.make(id)}
+                          connected={Boolean(source.refreshToken)}
+                        />
+                      ) : null}
+                      <RemoveUsageProviderButton
+                        label={label}
+                        onConfirm={() => updateSettings({ usageLimitSources: { [id]: null } })}
+                      />
+                    </span>
                   ) : null
                 }
               />
@@ -121,9 +140,41 @@ export function UsageProviderSettings({
           onOpenChange={setAdding}
           environmentId={environmentId}
           environmentLabel={environmentLabel}
+          existingIds={new Set(Object.keys(sources))}
         />
       ) : null}
     </>
+  );
+}
+
+/** Reconnecting replaces an expired or revoked sign-in; the current one keeps working until then. */
+function ConnectUsageSourceButton({
+  environmentId,
+  sourceId,
+  connected,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly sourceId: UsageLimitSourceId;
+  readonly connected: boolean;
+}) {
+  const signIn = useUsageSourceConnect(environmentId);
+  if (signIn.state.status === "waiting") {
+    return (
+      <Button size="xs" variant="ghost" onClick={signIn.reopen}>
+        Open sign-in again
+      </Button>
+    );
+  }
+  return (
+    <Button
+      size="xs"
+      variant="outline"
+      disabled={signIn.state.status === "starting"}
+      title={signIn.state.status === "failed" ? signIn.state.message : undefined}
+      onClick={() => void signIn.start({ sourceId })}
+    >
+      {signIn.state.status === "failed" ? "Retry sign-in" : connected ? "Reconnect" : "Connect"}
+    </Button>
   );
 }
 

@@ -17,6 +17,8 @@ const COMMIT_HASH_DISPLAY_LENGTH = 12;
 
 const AppPackageMetadata = Schema.Struct({
   t3codeCommitHash: Schema.optional(Schema.String),
+  // Set by fork builds (build-desktop-artifact --fork) to their own appId.
+  t3codeAppUserModelId: Schema.optional(Schema.String),
 });
 const decodeAppPackageMetadata = Schema.decodeEffect(Schema.fromJsonString(AppPackageMetadata));
 
@@ -47,19 +49,38 @@ export const make = Effect.gen(function* () {
   const userDataContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
   const commitHashCache = yield* Ref.make<Option.Option<Option.Option<string>>>(Option.none());
 
-  const resolveEmbeddedCommitHash = Effect.gen(function* () {
+  const readAppPackageMetadata = Effect.gen(function* () {
     const packageJsonPath = environment.path.join(environment.appRoot, "package.json");
     const raw = yield* fileSystem.readFileString(packageJsonPath).pipe(Effect.option);
     return yield* Option.match(raw, {
-      onNone: () => Effect.succeed(Option.none<string>()),
+      onNone: () => Effect.succeed(Option.none<typeof AppPackageMetadata.Type>()),
       onSome: (value) =>
         decodeAppPackageMetadata(value).pipe(
-          Effect.map((parsed) =>
-            Option.fromNullishOr(parsed.t3codeCommitHash).pipe(Option.flatMap(normalizeCommitHash)),
-          ),
-          Effect.orElseSucceed(() => Option.none<string>()),
+          Effect.asSome,
+          Effect.orElseSucceed(() => Option.none<typeof AppPackageMetadata.Type>()),
         ),
     });
+  });
+
+  const resolveEmbeddedCommitHash = readAppPackageMetadata.pipe(
+    Effect.map((metadata) =>
+      metadata.pipe(
+        Option.flatMap((parsed) => Option.fromNullishOr(parsed.t3codeCommitHash)),
+        Option.flatMap(normalizeCommitHash),
+      ),
+    ),
+  );
+
+  // Packaged fork builds embed their own AppUserModelID so taskbar grouping and
+  // notifications match their Start menu shortcut instead of the official app.
+  const resolveAppUserModelId = Effect.gen(function* () {
+    if (!environment.isPackaged) return environment.appUserModelId;
+    const embedded = (yield* readAppPackageMetadata).pipe(
+      Option.flatMap((parsed) => Option.fromNullishOr(parsed.t3codeAppUserModelId)),
+      Option.map((value) => value.trim()),
+      Option.filter((value) => value.length > 0),
+    );
+    return Option.getOrElse(embedded, () => environment.appUserModelId);
   });
 
   const resolveAboutCommitHash = Effect.gen(function* () {
@@ -104,7 +125,7 @@ export const make = Effect.gen(function* () {
     });
 
     if (environment.platform === "win32") {
-      yield* electronApp.setAppUserModelId(environment.appUserModelId);
+      yield* electronApp.setAppUserModelId(yield* resolveAppUserModelId);
     }
 
     // Unpackaged runs only. A packaged bundle already carries its icon in

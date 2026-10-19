@@ -128,10 +128,51 @@ or endpoint configurations do not report subscription limits.
 API-key accounts may not report subscription limits. This also applies to Claude connections
 using a proxy through `ANTHROPIC_AUTH_TOKEN`.
 
-## Connect a CLIProxyAPI hub
+## Rotate accounts when a limit hits
 
-To see pooled accounts, open **Settings → Providers → Usage providers → Add hub**. Choose the
-environment that will connect to the hub and enter its URL and management key.
+With two or more accounts of the same provider, open **Settings > Providers > Account rotation**,
+turn on rotation for that provider, and tick the accounts a limited thread may move to. Only ticked
+accounts take part, so an API-key instance never starts paying for work unless you add it. When a
+thread stops on a usage limit, it continues on the next ticked account that is signed in and has
+usage left, in list order or by the earliest weekly reset or most usage left. An account that just
+hit its limit sits out until its reset. When every account is limited, the thread waits for its
+reset as before. Reset credits are never used automatically.
+
+Rotation leaves a thread alone when you changed its model after the stop, snoozed it, or it waits
+on a question. Messages you queued for the limited account are held instead of sending them back to
+it; resume the queue to send them anyway. Whether the new account sees the whole conversation
+depends on the provider: Claude needs a [shared conversations folder](./providers-claude.md#keep-the-full-conversation-across-accounts),
+Codex a shared `CODEX_HOME` with a shadow home per account. Otherwise it receives a summary.
+
+Web and desktop also tell you once when a limited account becomes available again, resets early,
+moves its reset earlier, or gains a reset credit, using your notification settings.
+
+## Connect a usage source
+
+Open **Settings → Providers → Usage providers → Add source** and pick the kind of source. Choose the
+environment that will connect to it; keys stay on that environment.
+
+- **CLIProxyAPI hub**: enter the hub URL and management key to see the accounts it pools.
+- **ElevenLabs**: enter an API key to see this month's characters left and when they reset.
+- **Canva**: Canva has no API for AI credits, so Limits links to Canva billing instead.
+- **fal**: enter a key created with the BILLING (or FULL) preset; a plain API key cannot read the
+  balance.
+- **DeepSeek**: enter an API key. DeepSeek reports no spend, so spend today and this month is counted
+  from balance changes after you add the source.
+- **OpenRouter**: the API key shows that key's spend today, this week and this month. Add a
+  management key to also see the account's remaining credits.
+- **TypeSafe (Jev)**: TypeSafe has no balance API. Optionally enter the credit you bought; Limits
+  links to the TypeSafe console.
+- **Higgsfield**: choose **Connect Higgsfield** and sign in in the browser. The sign-in returns
+  to the environment's local address, so finish it on the computer running that environment.
+  Limits shows the credits left, your plan, and an estimated monthly allowance and reset date
+  (Higgsfield reports only the balance, so both are worked out from your credit history). When
+  the sign-in expires, choose **Reconnect** next to the source.
+
+Balances and spend appear under **Usage → Limits → Tools & money**. A source that cannot be read is
+listed with its error below the limits.
+
+### CLIProxyAPI hubs
 
 The accounts appear under **Usage → Limits**. Codex accounts show banked reset credits; select an
 account and choose **Use reset** to redeem one. No hub plugin is required.
@@ -139,6 +180,32 @@ account and choose **Use reset** to redeem one. No hub plugin is required.
 This connection supplies usage information; configure
 the provider separately to send agent requests through the hub. Remove the hub from the same
 settings section when you no longer need it.
+
+## Quick overview beside a thread
+
+The bottom drawer switches between **Terminal** and **Usage** with the toggle at its top. Each
+thread remembers its choice, and terminals keep running while Usage is shown. You can also open
+it from the command palette with **Show usage in the bottom drawer**, or as a right-panel tab
+with **Open usage panel**.
+
+- **Context** shows how full this thread's context window is.
+- **Frontier** lists Codex, Claude, Antigravity and other agent accounts. Each row shows the
+  window that limits the account, when it is full again (countdown and clock time), and whether
+  it lasts until the reset at the current pace. The color follows the pace, not the raw
+  percentage. **Use now** marks the account in a family whose leftover resets soon, or else the
+  one with the most headroom. For a provider with several accounts, the family also says whether
+  rotation is on and which account a limited thread would move to next.
+- **Tools & money** lists usage sources such as fal, Higgsfield, ElevenLabs, OpenRouter, DeepSeek
+  and Jev: balances, credits, spend, and how many days a balance lasts at this month's pace.
+- Estimated numbers are marked, numbers older than ten minutes say how old they are, and
+  sources that report nothing usable are listed instead of hidden.
+
+**Extras** collects plan perks that end on a date. Banked Codex resets appear on their own; add
+others yourself, such as free generations, with **Add extra**. Swipe or use the arrow keys to
+move through them. You get a reminder three days and one day before an extra ends, using your
+notification settings. The gift
+button next to the context meter in the composer counts extras ending within three days and opens
+the drawer at Extras.
 
 ## Subscription usage widget
 

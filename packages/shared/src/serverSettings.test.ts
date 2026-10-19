@@ -725,6 +725,28 @@ describe("serverSettings helpers", () => {
     expect(Object.keys(removed.usageLimitSources)).toEqual([hubB]);
   });
 
+  it("replaces account rotation per driver so a shortened order really shrinks", () => {
+    const codex = ProviderDriverKind.make("codex");
+    const claude = ProviderDriverKind.make("claudeAgent");
+    const one = ProviderInstanceId.make("codex-one");
+    const two = ProviderInstanceId.make("codex-two");
+    const current = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      usageRotation: {
+        [codex]: { enabled: true, strategy: "order", order: [one, two] },
+        [claude]: { enabled: true, strategy: "most-remaining", order: [] },
+      },
+    });
+    const shortened = applyServerSettingsPatch(current, {
+      usageRotation: { [codex]: { enabled: true, strategy: "order", order: [two] } },
+    });
+    expect(shortened.usageRotation[codex]?.order).toEqual([two]);
+    expect(shortened.usageRotation[claude]?.strategy).toBe("most-remaining");
+    expect(
+      applyServerSettingsPatch(shortened, { usageRotation: { [codex]: null } }).usageRotation,
+    ).toEqual({ [claude]: { enabled: true, strategy: "most-remaining", order: [] } });
+    expect(DEFAULT_SERVER_SETTINGS.usageRotation).toEqual({});
+  });
+
   it("replaces and removes individual usage prices without clobbering other models", () => {
     const prices = { inputCostPerMillionTokens: 2, outputCostPerMillionTokens: 8 };
     const current = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
@@ -745,6 +767,23 @@ describe("serverSettings helpers", () => {
     });
     expect(removed.usagePriceOverrides).toEqual({ "other-model": prices });
     expect(current.usagePriceOverrides["example-model"]?.cacheReadCostPerMillionTokens).toBe(0.5);
+  });
+
+  it("adds and removes one usage extra without touching the others", () => {
+    const perk = (title: string) => ({
+      service: "Higgsfield",
+      title,
+      expiresAt: "2026-11-02T22:59:59.000Z",
+    });
+    const current = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      usageExtras: { a: perk("AI Influencer free") },
+    });
+    const added = applyServerSettingsPatch(current, {
+      usageExtras: { b: { ...perk("Nano Banana unlimited"), remaining: 3 } },
+    });
+    expect(Object.keys(added.usageExtras)).toEqual(["a", "b"]);
+    const removed = applyServerSettingsPatch(added, { usageExtras: { a: null } });
+    expect(removed.usageExtras).toEqual({ b: { ...perk("Nano Banana unlimited"), remaining: 3 } });
   });
 
   it("stores background activity profiles as a versioned object and syncs legacy aliases", () => {

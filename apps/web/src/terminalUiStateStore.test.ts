@@ -3,11 +3,13 @@ import { ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
+  drawerHeightOf,
   migratePersistedTerminalUiStateStoreState,
   selectThreadTerminalUiState,
+  USAGE_DRAWER_MIN_HEIGHT,
   useTerminalUiStateStore,
 } from "./terminalUiStateStore";
-import { DEFAULT_THREAD_TERMINAL_ID } from "./types";
+import { DEFAULT_THREAD_TERMINAL_HEIGHT, DEFAULT_THREAD_TERMINAL_ID } from "./types";
 
 const THREAD_ID = ThreadId.make("thread-1");
 const THREAD_REF = scopeThreadRef("environment-a" as never, THREAD_ID);
@@ -34,6 +36,119 @@ describe("terminalUiStateStore actions", () => {
       activeTerminalId: "",
       terminalGroups: [],
       activeTerminalGroupId: "",
+    });
+  });
+
+  describe("drawer view", () => {
+    const current = () =>
+      selectThreadTerminalUiState(
+        useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+        THREAD_REF,
+      );
+
+    it("opens the usage view without starting a shell, and the terminal view starts one", () => {
+      const store = useTerminalUiStateStore.getState();
+      store.setDrawerView(THREAD_REF, "usage", true);
+      expect(current()).toMatchObject({ terminalOpen: true, drawerView: "usage", terminalIds: [] });
+
+      // Closing and reopening keeps the thread's choice.
+      store.setTerminalOpen(THREAD_REF, false);
+      store.setTerminalOpen(THREAD_REF, true);
+      expect(current()).toMatchObject({ terminalOpen: true, drawerView: "usage", terminalIds: [] });
+
+      store.setDrawerView(THREAD_REF, "terminal");
+      expect(current().drawerView).toBeUndefined();
+      expect(current().terminalIds).toEqual([DEFAULT_THREAD_TERMINAL_ID]);
+    });
+
+    it("keeps running terminals and their layout across a switch to usage and back", () => {
+      const store = useTerminalUiStateStore.getState();
+      store.setTerminalOpen(THREAD_REF, true);
+      store.splitTerminal(THREAD_REF, "terminal-2");
+      const before = current();
+
+      store.setDrawerView(THREAD_REF, "usage");
+      expect(current()).toMatchObject({
+        drawerView: "usage",
+        terminalOpen: true,
+        terminalIds: before.terminalIds,
+        terminalGroups: before.terminalGroups,
+        activeTerminalId: "terminal-2",
+      });
+
+      store.setDrawerView(THREAD_REF, "terminal");
+      expect(current()).toEqual(before);
+    });
+
+    it("stays on usage when a background shell exits, and a new shell brings the terminals back", () => {
+      const store = useTerminalUiStateStore.getState();
+      store.setTerminalOpen(THREAD_REF, true);
+      store.setDrawerView(THREAD_REF, "usage");
+      store.closeTerminal(THREAD_REF, DEFAULT_THREAD_TERMINAL_ID);
+      expect(current()).toMatchObject({ terminalOpen: true, drawerView: "usage", terminalIds: [] });
+
+      store.newTerminal(THREAD_REF, "terminal-2");
+      expect(current().drawerView).toBeUndefined();
+      expect(current().terminalIds).toEqual(["terminal-2"]);
+    });
+
+    it("is remembered per thread", () => {
+      const store = useTerminalUiStateStore.getState();
+      store.setDrawerView(THREAD_REF, "usage", true);
+      store.setTerminalOpen(OTHER_THREAD_REF, true);
+      expect(current().drawerView).toBe("usage");
+      expect(
+        selectThreadTerminalUiState(
+          useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+          OTHER_THREAD_REF,
+        ).drawerView,
+      ).toBeUndefined();
+    });
+
+    it("opens usage at least at the minimum height and leaves the terminal height alone", () => {
+      const store = useTerminalUiStateStore.getState();
+      store.setTerminalOpen(THREAD_REF, true);
+      expect(drawerHeightOf(current())).toBe(DEFAULT_THREAD_TERMINAL_HEIGHT);
+
+      store.setDrawerView(THREAD_REF, "usage");
+      expect(drawerHeightOf(current())).toBe(USAGE_DRAWER_MIN_HEIGHT);
+
+      store.setDrawerView(THREAD_REF, "terminal");
+      expect(drawerHeightOf(current())).toBe(DEFAULT_THREAD_TERMINAL_HEIGHT);
+      expect(current().usageHeight).toBeUndefined();
+    });
+
+    it("keeps a taller terminal or usage height, and resizing usage keeps the terminals' height", () => {
+      const store = useTerminalUiStateStore.getState();
+      store.setTerminalOpen(THREAD_REF, true);
+      store.setTerminalHeight(THREAD_REF, 600);
+      store.setDrawerView(THREAD_REF, "usage");
+      expect(drawerHeightOf(current())).toBe(600);
+
+      store.setUsageHeight(THREAD_REF, 700);
+      expect(current().terminalHeight).toBe(600);
+      store.setDrawerView(THREAD_REF, "terminal");
+      expect(drawerHeightOf(current())).toBe(600);
+      store.setDrawerView(THREAD_REF, "usage");
+      expect(drawerHeightOf(current())).toBe(700);
+    });
+
+    it("honours a shorter usage resize until the usage view is opened again", () => {
+      const store = useTerminalUiStateStore.getState();
+      store.setDrawerView(THREAD_REF, "usage", true);
+      store.setUsageHeight(THREAD_REF, 250);
+      // Choosing usage while it is already shown is not a new opening.
+      store.setDrawerView(THREAD_REF, "usage", true);
+      expect(drawerHeightOf(current())).toBe(250);
+
+      store.setTerminalOpen(THREAD_REF, false);
+      store.setTerminalOpen(THREAD_REF, true);
+      expect(drawerHeightOf(current())).toBe(USAGE_DRAWER_MIN_HEIGHT);
+
+      store.setUsageHeight(THREAD_REF, 250);
+      store.setDrawerView(THREAD_REF, "terminal");
+      store.setDrawerView(THREAD_REF, "usage");
+      expect(drawerHeightOf(current())).toBe(USAGE_DRAWER_MIN_HEIGHT);
     });
   });
 

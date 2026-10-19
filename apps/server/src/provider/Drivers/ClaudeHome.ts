@@ -64,13 +64,49 @@ export const hasClaudeManagedMcpConfig = Effect.fn("hasClaudeManagedMcpConfig")(
   return yield* fileSystem.exists(managedMcpConfigPath).pipe(Effect.orElseSucceed(() => false));
 });
 
+/**
+ * Claude resumes a session from `<CLAUDE_CONFIG_DIR>/projects/<cwd>/<id>.jsonl`.
+ * Accounts whose projects folder resolves to the same shared folder can resume
+ * each other's sessions natively, so they share a continuation group. A shared
+ * path that this home does not actually link to keeps the home key: the switch
+ * then hands off context instead of resuming a transcript the CLI cannot find.
+ */
 export const makeClaudeContinuationGroupKey = Effect.fn("makeClaudeContinuationGroupKey")(
   function* (
-    config: Pick<ClaudeSettings, "homePath">,
+    config: Pick<ClaudeSettings, "homePath"> & Partial<Pick<ClaudeSettings, "sharedSessionsPath">>,
     environment?: NodeJS.ProcessEnv,
-  ): Effect.fn.Return<string, never, Path.Path> {
+  ): Effect.fn.Return<string, never, Path.Path | FileSystem.FileSystem> {
     const resolvedHomePath = yield* resolveClaudeHomePath(config, environment);
-    return `claude:home:${resolvedHomePath}`;
+    const homeKey = `claude:home:${resolvedHomePath}`;
+    const sharedSessionsPath = config.sharedSessionsPath?.trim() ?? "";
+    if (sharedSessionsPath.length === 0) return homeKey;
+    const path = yield* Path.Path;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const sharedPath = path.resolve(
+      expandHomePath(sharedSessionsPath, yield* HostProcess.HomeDirectory),
+    );
+    const realPathOf = (target: string) =>
+      fileSystem.realPath(target).pipe(Effect.orElseSucceed(() => null));
+    const sharedRealPath = yield* realPathOf(sharedPath);
+    const projectsRealPath = yield* realPathOf(path.join(resolvedHomePath, "projects"));
+    // Windows paths compare case-insensitively; a differently typed drive letter is the same folder.
+    const comparable =
+      (yield* HostProcess.Platform) === "win32"
+        ? (value: string) => value.toLowerCase()
+        : (value: string) => value;
+    if (
+      sharedRealPath === null ||
+      projectsRealPath === null ||
+      comparable(sharedRealPath) !== comparable(projectsRealPath)
+    ) {
+      yield* Effect.logWarning("claude.shared-sessions.not-linked", {
+        homePath: resolvedHomePath,
+        sharedSessionsPath: sharedPath,
+        projectsRealPath,
+      });
+      return homeKey;
+    }
+    return `claude:sessions:${comparable(sharedRealPath)}`;
   },
 );
 

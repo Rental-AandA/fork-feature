@@ -466,6 +466,17 @@ available.
   - `electron-updater` reads `latest-mac.yml` on stable and `nightly-mac.yml` on nightly, for both Intel and Apple Silicon.
   - The workflow merges the per-arch mac manifests into one channel-specific mac manifest before publishing the GitHub Release.
 
+### Fork builds (`--fork`)
+
+`node scripts/build-desktop-artifact.ts --fork` (env `T3CODE_DESKTOP_FORK=true`)
+builds "T3 Code Feature": appId `com.t3tools.t3code.feature`, package name
+`t3code-feature` (NSIS installs to `%LOCALAPPDATA%\Programs\t3code-feature`),
+artifacts named `T3-Code-Feature-*`, and no update feed (no `app-update.yml`,
+so the updater stays disabled). It shares the official app's data:
+`~/.t3/userdata` and `%APPDATA%\t3code-v2`. Close the official app first; the
+shared Electron single-instance lock and the server ownership lock
+(`server-owner.sqlite`) keep the two from running on the same data at once.
+
 ### Windows payload topology and update validation
 
 Windows packages the bundled server and only its runtime-external/native

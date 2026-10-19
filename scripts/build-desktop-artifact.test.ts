@@ -398,6 +398,34 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
+  it.effect("gives fork builds their own identity and no update feed", () =>
+    Effect.gen(function* () {
+      const fork = yield* createBuildConfig(
+        "win",
+        "nsis",
+        "0.1.0",
+        false,
+        false,
+        undefined,
+        undefined,
+        false,
+        "x64",
+        true,
+      );
+
+      assert.equal(fork.appId, "com.t3tools.t3code.feature");
+      assert.equal(fork.productName, "T3 Code Feature");
+      assert.equal(fork.artifactName, "T3-Code-Feature-${version}-${arch}.${ext}");
+      assert.isNull(fork.publish);
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({ env: { GITHUB_REPOSITORY: "pingdotgg/t3code" } }),
+        ),
+      ),
+    ),
+  );
+
   it("stages only the desktop main-process externals", () => {
     assert.deepStrictEqual(
       resolveDesktopRuntimeDependencies(

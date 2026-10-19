@@ -1,4 +1,6 @@
 import {
+  defaultInstanceIdForDriver,
+  PROVIDER_DISPLAY_NAMES,
   type EnvironmentId,
   type UsageLimitsReport,
   type ProviderInstanceId,
@@ -179,6 +181,25 @@ export interface LimitAccount {
   readonly limits: ServerProviderUsageLimits;
 }
 
+/**
+ * The name the app shows for an instance (see resolveProviderInstanceDisplayName in
+ * client-runtime), so three Codex accounts read "Codex", "Codex 2" and "Codex 3". The plain
+ * default instance gets null: its email, when known, tells it apart better than "Codex".
+ */
+function instanceAccountName(
+  provider: Pick<ServerProvider, "instanceId" | "driver" | "displayName">,
+): string | null {
+  const own = provider.displayName?.trim();
+  if (own && own !== PROVIDER_DISPLAY_NAMES[provider.driver]) return own;
+  if (provider.instanceId === defaultInstanceIdForDriver(provider.driver)) return null;
+  const humanized = provider.instanceId
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+  return humanized || own || null;
+}
+
 export function collectLimitAccounts(presentations: LimitPresentations): readonly LimitAccount[] {
   const accounts = new Map<string, LimitAccount>();
   const creditSources = new Map<string, LimitAccount>();
@@ -253,7 +274,7 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
       merge(resolveKey(nativeReport(provider)) ?? `${environmentId}:${provider.instanceId}`, {
         key: `${environmentId}:${provider.instanceId}`,
         driver: provider.driver,
-        displayName: provider.displayName?.trim() || null,
+        displayName: instanceAccountName(provider),
         email: provider.auth.email,
         plan: provider.auth.label,
         accentColor: provider.accentColor,

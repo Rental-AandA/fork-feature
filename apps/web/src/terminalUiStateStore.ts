@@ -13,11 +13,22 @@ import {
 /** What the bottom drawer shows: the thread's terminals or the usage overview. */
 export type ThreadDrawerView = "terminal" | "usage";
 
+/**
+ * Opening the usage view never leaves it shorter than this: enough for the context bar and the
+ * first accounts of both columns. The drawer still caps it to the window.
+ */
+export const USAGE_DRAWER_MIN_HEIGHT = 420;
+
 interface ThreadTerminalUiState {
   terminalOpen: boolean;
   /** Absent in layouts saved before the usage view existed; read through `drawerViewOf`. */
   drawerView?: ThreadDrawerView;
   terminalHeight: number;
+  /**
+   * The usage view's own height, set only by resizing it, so it never changes the terminals'.
+   * Without it the usage view uses the terminal height, raised to `USAGE_DRAWER_MIN_HEIGHT`.
+   */
+  usageHeight?: number;
   terminalIds: string[];
   activeTerminalId: string;
   terminalGroups: ThreadTerminalGroup[];
@@ -168,6 +179,30 @@ export function drawerViewOf(state: { readonly drawerView?: ThreadDrawerView }):
   return state.drawerView === "usage" ? "usage" : "terminal";
 }
 
+/** The height the drawer shows for its current view. */
+export function drawerHeightOf(state: {
+  readonly drawerView?: ThreadDrawerView;
+  readonly terminalHeight: number;
+  readonly usageHeight?: number;
+}): number {
+  if (drawerViewOf(state) === "terminal") return state.terminalHeight;
+  return state.usageHeight ?? Math.max(state.terminalHeight, USAGE_DRAWER_MIN_HEIGHT);
+}
+
+function isPositiveHeight(height: number | undefined): height is number {
+  return height !== undefined && Number.isFinite(height) && height > 0;
+}
+
+/**
+ * Coming into the usage view forgets a resize below the minimum, so the overview opens tall
+ * enough to read; a taller resize is kept.
+ */
+function withUsageHeightFloor(state: ThreadTerminalUiState): ThreadTerminalUiState {
+  if (state.usageHeight === undefined || state.usageHeight >= USAGE_DRAWER_MIN_HEIGHT) return state;
+  const { usageHeight: _short, ...rest } = state;
+  return rest;
+}
+
 /** Starting or revealing a shell is a request to see it, so it brings the terminal view back. */
 function withTerminalView(state: ThreadTerminalUiState): ThreadTerminalUiState {
   if (state.drawerView === undefined) return state;
@@ -183,6 +218,7 @@ function threadTerminalUiStateEqual(
     left.terminalOpen === right.terminalOpen &&
     drawerViewOf(left) === drawerViewOf(right) &&
     left.terminalHeight === right.terminalHeight &&
+    left.usageHeight === right.usageHeight &&
     left.activeTerminalId === right.activeTerminalId &&
     left.activeTerminalGroupId === right.activeTerminalGroupId &&
     arraysEqual(left.terminalIds, right.terminalIds) &&
@@ -232,6 +268,7 @@ function normalizeThreadTerminalUiState(state: ThreadTerminalUiState): ThreadTer
       Number.isFinite(state.terminalHeight) && state.terminalHeight > 0
         ? state.terminalHeight
         : DEFAULT_THREAD_TERMINAL_HEIGHT,
+    ...(isPositiveHeight(state.usageHeight) ? { usageHeight: state.usageHeight } : {}),
     terminalIds: nextTerminalIds,
     activeTerminalId,
     terminalGroups,
@@ -365,7 +402,8 @@ function setThreadTerminalOpen(state: ThreadTerminalUiState, open: boolean): Thr
     return upsertTerminalIntoGroups(normalized, DEFAULT_THREAD_TERMINAL_ID, "new");
   }
   if (normalized.terminalOpen === open) return normalized;
-  return { ...normalized, terminalOpen: open };
+  const opened = { ...normalized, terminalOpen: open };
+  return open && drawerViewOf(opened) === "usage" ? withUsageHeightFloor(opened) : opened;
 }
 
 /**
@@ -379,7 +417,12 @@ function setThreadDrawerView(
 ): ThreadTerminalUiState {
   const normalized = normalizeThreadTerminalUiState(state);
   const { drawerView: _previous, ...rest } = normalized;
-  const switched: ThreadTerminalUiState = view === "usage" ? { ...rest, drawerView: view } : rest;
+  const entersUsage =
+    view === "usage" && (drawerViewOf(normalized) !== "usage" || !normalized.terminalOpen);
+  const switched: ThreadTerminalUiState =
+    view === "usage"
+      ? { ...(entersUsage ? withUsageHeightFloor(rest) : rest), drawerView: view }
+      : rest;
   const next = setThreadTerminalOpen(switched, open || normalized.terminalOpen);
   return threadTerminalUiStateEqual(next, normalized) ? normalized : next;
 }
@@ -393,6 +436,12 @@ function setThreadTerminalHeight(
     return normalized;
   }
   return { ...normalized, terminalHeight: height };
+}
+
+function setThreadUsageHeight(state: ThreadTerminalUiState, height: number): ThreadTerminalUiState {
+  const normalized = normalizeThreadTerminalUiState(state);
+  if (!isPositiveHeight(height) || normalized.usageHeight === height) return normalized;
+  return { ...normalized, usageHeight: height };
 }
 
 function splitThreadTerminal(
@@ -451,6 +500,7 @@ function closeThreadTerminal(
           ...createDefaultThreadTerminalUiState(),
           terminalOpen: normalized.terminalOpen,
           terminalHeight: normalized.terminalHeight,
+          ...(normalized.usageHeight === undefined ? {} : { usageHeight: normalized.usageHeight }),
           drawerView: "usage",
         }
       : createDefaultThreadTerminalUiState();
@@ -481,6 +531,7 @@ function closeThreadTerminal(
     terminalOpen: normalized.terminalOpen,
     ...(drawerViewOf(normalized) === "usage" ? { drawerView: "usage" as const } : {}),
     terminalHeight: normalized.terminalHeight,
+    ...(normalized.usageHeight === undefined ? {} : { usageHeight: normalized.usageHeight }),
     terminalIds: remainingTerminalIds,
     activeTerminalId: nextActiveTerminalId,
     terminalGroups,
@@ -604,6 +655,8 @@ interface TerminalUiStateStoreState {
   /** Switches the drawer between terminals and usage; `open` also opens a closed drawer. */
   setDrawerView: (threadRef: ScopedThreadRef, view: ThreadDrawerView, open?: boolean) => void;
   setTerminalHeight: (threadRef: ScopedThreadRef, height: number) => void;
+  /** Resizing the usage view; the terminals keep their own height. */
+  setUsageHeight: (threadRef: ScopedThreadRef, height: number) => void;
   splitTerminal: (threadRef: ScopedThreadRef, terminalId: string) => void;
   splitTerminalVertical: (threadRef: ScopedThreadRef, terminalId: string) => void;
   newTerminal: (threadRef: ScopedThreadRef, terminalId: string) => void;
@@ -693,6 +746,8 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
         },
         setTerminalHeight: (threadRef, height) =>
           updateTerminal(threadRef, (state) => setThreadTerminalHeight(state, height)),
+        setUsageHeight: (threadRef, height) =>
+          updateTerminal(threadRef, (state) => setThreadUsageHeight(state, height)),
         splitTerminal: (threadRef, terminalId) =>
           updateTerminal(threadRef, (state) => splitThreadTerminal(state, terminalId), {
             terminalId,

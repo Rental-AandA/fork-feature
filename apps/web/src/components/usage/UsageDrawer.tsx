@@ -1,5 +1,5 @@
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
+import type { EnvironmentId, ProviderInstanceId, ScopedThreadRef } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { ArrowUpRightIcon } from "lucide-react";
 import { useState } from "react";
@@ -7,6 +7,7 @@ import { useState } from "react";
 import type { ContextWindowSnapshot } from "../../lib/contextWindow";
 import { Button } from "../ui/button";
 import { RefreshIcon } from "../ui/refresh-icon";
+import { useQuietThreadShell } from "../../state/entities";
 import { UsageOverview } from "./UsageOverview";
 import { useRefreshUsage, useUsageNow } from "./useUsageOverview";
 
@@ -14,10 +15,12 @@ import { useRefreshUsage, useUsageNow } from "./useUsageOverview";
 export function UsageDrawerBody({
   threadKey,
   threadEnvironmentId,
+  threadInstanceId,
   contextWindow,
 }: {
   readonly threadKey: string;
   readonly threadEnvironmentId: EnvironmentId;
+  readonly threadInstanceId: ProviderInstanceId | null;
   readonly contextWindow: ContextWindowSnapshot | null;
 }) {
   const now = useUsageNow();
@@ -26,6 +29,7 @@ export function UsageDrawerBody({
       now={now}
       threadKey={threadKey}
       threadEnvironmentId={threadEnvironmentId}
+      threadInstanceId={threadInstanceId}
       contextWindow={contextWindow}
     />
   );
@@ -64,6 +68,7 @@ export function UsageDrawerActions() {
  */
 export function UsagePanelSurface({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
   const now = useUsageNow();
+  const threadInstanceId = useQuietThreadShell(threadRef)?.providerInstanceId ?? null;
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-9 shrink-0 items-center justify-end gap-1 border-b border-border/70 px-2">
@@ -74,6 +79,7 @@ export function UsagePanelSurface({ threadRef }: { readonly threadRef: ScopedThr
           now={now}
           threadKey={scopedThreadKey(threadRef)}
           threadEnvironmentId={threadRef.environmentId}
+          threadInstanceId={threadInstanceId}
         />
       </div>
     </div>

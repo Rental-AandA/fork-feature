@@ -9,6 +9,7 @@ import {
   type ServerProviderUsageWindow,
   type UsageRotationSettings,
 } from "@t3tools/contracts";
+import { usageLimitState } from "@t3tools/shared/usageRotation";
 import * as DateTime from "effect/DateTime";
 
 import type { ProjectionLimitFailoverCandidate } from "./ProjectionStore.ts";
@@ -19,7 +20,6 @@ import {
   limitCooldownUntilMs,
   pickFailoverInstance,
   planLimitFailover,
-  usageLimitState,
 } from "./UsageLimitFailover.ts";
 
 const NOW_MS = Date.parse("2026-10-20T12:00:00.000Z");

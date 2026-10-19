@@ -297,8 +297,12 @@ export function UsageExtrasCarousel({
 
   useEffect(() => {
     if (focusRequestId === 0) return;
-    sectionRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     stripRef.current?.focus({ preventScroll: true });
+    // A frame later the drawer has grown to fit what it can, so this scrolls only what is left.
+    // Not cancelled on cleanup: the request is consumed, and so cleared, before the frame.
+    requestAnimationFrame(() =>
+      sectionRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }),
+    );
   }, [focusRequestId]);
 
   const step = (direction: 1 | -1) => {

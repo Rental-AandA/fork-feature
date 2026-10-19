@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import {
   formatCountdown,
   formatRunway,
@@ -10,6 +10,7 @@ import {
   type UsageOverview as UsageOverviewData,
   type UsageTone,
 } from "@t3tools/shared/usageOverview";
+import { useNavigate } from "@tanstack/react-router";
 import { AlertTriangleIcon, ExternalLinkIcon } from "lucide-react";
 import { useEffect, useEffectEvent, useId, type ReactNode } from "react";
 
@@ -19,19 +20,23 @@ import { ensureLocalApi } from "../../localApi";
 import { cn } from "../../lib/utils";
 import { formatRelativeTimeLabel, formatUpcomingTimestamp } from "../../timestampFormat";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+import { searchableSetting } from "../settings/settingsSearch";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { UsageExtrasCarousel } from "./UsageExtras";
 import { AccountAvatar, AccountName } from "./UsageLimitsPooled";
 import {
   accountPlainName,
+  planLabel,
   providerLabel,
   useExtrasHome,
   useRefreshUsage,
+  useRotationHints,
   useUsageExtras,
   useUsageExtrasFocusStore,
   useUsageOverview,
 } from "./useUsageOverview";
+import type { RotationHint } from "./usageRotationHints.logic";
 
 const TONE_BAR: Record<UsageTone, string> = {
   ok: "bg-success",
@@ -149,8 +154,13 @@ function FrontierAccountRow({
         <AccountAvatar account={row.account} className="size-4" />
         <AccountName
           account={row.account}
-          className="min-w-0 truncate font-medium text-foreground"
+          className="min-w-0 shrink truncate font-medium text-foreground"
         />
+        {row.account.plan ? (
+          <span className="min-w-0 shrink-[2] truncate text-2xs text-muted-foreground">
+            {planLabel(row.account.plan)}
+          </span>
+        ) : null}
         {isRecommended ? (
           <Tooltip>
             <TooltipTrigger
@@ -234,12 +244,73 @@ function FrontierAccountRow({
   );
 }
 
+function RotationHintLine({
+  hint,
+  familyName,
+}: {
+  readonly hint: RotationHint;
+  readonly familyName: string;
+}) {
+  const navigate = useNavigate();
+  const openRotationSettings = () =>
+    void navigate({
+      to: "/settings/providers",
+      hash: searchableSetting("usage-rotation").id,
+      hashScrollIntoView: false,
+      state: { settingsTargetHighlight: true },
+    });
+  const action = (label: string) => (
+    <button
+      type="button"
+      className="font-medium text-foreground underline-offset-2 hover:underline focus-visible:underline focus-visible:outline-none"
+      onClick={openRotationSettings}
+    >
+      {label}
+    </button>
+  );
+  switch (hint.kind) {
+    case "off":
+      return (
+        <p className="flex items-center gap-1 text-2xs text-muted-foreground">
+          Rotation off for {familyName} ·{action("Turn on")}
+        </p>
+      );
+    case "noneTicked":
+      return (
+        <p className="flex items-center gap-1 text-2xs text-muted-foreground">
+          Rotation on, no account ticked ·{action("Choose accounts")}
+        </p>
+      );
+    case "next":
+      return (
+        <Tooltip>
+          <TooltipTrigger
+            render={<p className="min-w-0 self-start truncate text-2xs text-muted-foreground" />}
+          >
+            Rotation on · Next: <span className="text-foreground">{hint.accountName}</span>
+          </TooltipTrigger>
+          <TooltipPopup side="top">
+            A thread here that hits its limit continues on {hint.accountName}.
+          </TooltipPopup>
+        </Tooltip>
+      );
+    case "noneFree":
+      return (
+        <p className="text-2xs text-muted-foreground">
+          Rotation on · no other ticked account is free right now
+        </p>
+      );
+  }
+}
+
 function FrontierColumn({
   families,
+  rotation,
   now,
   clock,
 }: {
   readonly families: readonly FrontierFamily[];
+  readonly rotation: ReadonlyMap<ProviderDriverKind, RotationHint>;
   readonly now: number;
   readonly clock: (at: number, now: number) => string;
 }) {
@@ -252,6 +323,7 @@ function FrontierColumn({
       ) : (
         families.map((family) => {
           const label = providerLabel(String(family.driver));
+          const hint = rotation.get(family.driver);
           return (
             <div key={family.driver} className="flex flex-col">
               <h4 className="flex items-center gap-1.5 text-2xs font-medium tracking-wide text-muted-foreground uppercase">
@@ -264,6 +336,7 @@ function FrontierColumn({
                 />
                 {label}
               </h4>
+              {hint ? <RotationHintLine hint={hint} familyName={label} /> : null}
               <ul className="flex flex-col divide-y divide-border/50">
                 {family.rows.map((row) => (
                   <FrontierAccountRow
@@ -368,8 +441,7 @@ function ToolsColumn({
                 ) : null}
                 {row.account.plan ? (
                   <span className="truncate text-2xs text-muted-foreground">
-                    {row.account.plan.charAt(0).toUpperCase()}
-                    {row.account.plan.slice(1)} plan
+                    {planLabel(row.account.plan)} plan
                   </span>
                 ) : null}
                 <span className="ms-auto">
@@ -498,15 +570,19 @@ export function UsageOverview({
   now,
   threadKey,
   threadEnvironmentId,
+  threadInstanceId = null,
   contextWindow,
 }: {
   readonly now: number;
   readonly threadKey: string | null;
   readonly threadEnvironmentId: EnvironmentId | null;
+  /** The thread's account, left out of the rotation's "Next" as the server leaves it out. */
+  readonly threadInstanceId?: ProviderInstanceId | null;
   /** Undefined hides the context bar, for surfaces without a thread composer. */
   readonly contextWindow?: ContextWindowSnapshot | null;
 }) {
   const overview = useUsageOverview(now);
+  const rotation = useRotationHints(threadEnvironmentId, threadInstanceId, now);
   const clock = useResetClock();
   const home = useExtrasHome(threadEnvironmentId);
   const extras = useUsageExtras(home, now);
@@ -534,7 +610,7 @@ export function UsageOverview({
     <div className="@container/usage flex min-w-0 flex-col gap-3">
       {contextWindow !== undefined ? <ContextUsageBar usage={contextWindow} /> : null}
       <div className="grid min-w-0 gap-x-6 gap-y-3 @2xl/usage:grid-cols-2">
-        <FrontierColumn families={overview.frontier} now={now} clock={clock} />
+        <FrontierColumn families={overview.frontier} rotation={rotation} now={now} clock={clock} />
         <ToolsColumn rows={overview.tools} links={overview.links} now={now} clock={clock} />
       </div>
       <Notices notices={overview.notices} />

@@ -657,6 +657,39 @@ describe("pools", () => {
     ]);
   });
 
+  it("names native accounts as the app names their instances, so siblings stay apart", () => {
+    const codex = (instanceId: string, displayName?: string) =>
+      provider({
+        instanceId: ProviderInstanceId.make(instanceId),
+        ...(displayName ? { displayName } : {}),
+        auth: { status: "authenticated", email: `${instanceId}@example.com` },
+        usageLimits: { checkedAt, windows: [window] },
+      });
+    const input = new Map([
+      [
+        EnvironmentId.make("env-a"),
+        {
+          ...laptop,
+          serverConfig: {
+            providers: [
+              codex("codex", "Codex"),
+              codex("codex_2"),
+              codex("codex_3", "Codex"),
+              codex("work", "Work seat"),
+            ],
+          },
+        },
+      ],
+    ]);
+    expect(collectLimitAccounts(input).map((account) => account.displayName)).toEqual([
+      // The default instance keeps its email chip rather than the bare family name.
+      null,
+      "Codex 2",
+      "Codex 3",
+      "Work seat",
+    ]);
+  });
+
   it("keys a hub account without an email by hub, so two environments on one hub share it", () => {
     const seat = {
       id: "claude-team-seat.json",

@@ -23,11 +23,13 @@ import { useProject, useQuietThreadShell } from "../state/entities";
 import { useEnvironmentScope } from "../state/session";
 import { useKnownTerminalSessions } from "../state/terminalSessions";
 import {
+  drawerHeightOf,
   drawerViewOf,
   selectThreadTerminalUiState,
   useTerminalUiStateStore,
 } from "../terminalUiStateStore";
 import { UsageDrawerActions, UsageDrawerBody } from "./usage/UsageDrawer";
+import { useUsageExtrasFocusStore } from "./usage/useUsageOverview";
 import { useThreadTerminalActions } from "./terminal/useThreadTerminalActions";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 
@@ -167,6 +169,11 @@ export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerm
     (session) => session.target.terminalId,
   );
   const storeSetTerminalHeight = useTerminalUiStateStore((state) => state.setTerminalHeight);
+  const storeSetUsageHeight = useTerminalUiStateStore((state) => state.setUsageHeight);
+  // The Extras button asks for the strip at the bottom; the drawer grows to show it with the rest.
+  const extrasRequestId = useUsageExtrasFocusStore((state) =>
+    state.request?.threadKey === scopedThreadKey(threadRef) ? state.request.id : 0,
+  );
   const storeSplitTerminal = useTerminalUiStateStore((state) => state.splitTerminal);
   const storeSplitTerminalVertical = useTerminalUiStateStore(
     (state) => state.splitTerminalVertical,
@@ -212,8 +219,9 @@ export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerm
     setLocalFocusRequestId((value) => value + 1);
   };
 
-  const setTerminalHeight = (height: number) => {
-    storeSetTerminalHeight(threadRef, height);
+  const setDrawerHeight = (height: number) => {
+    if (drawerView === "usage") storeSetUsageHeight(threadRef, height);
+    else storeSetTerminalHeight(threadRef, height);
   };
 
   const launchDrawerTerminal = (place: (terminalId: string) => void) => {
@@ -277,7 +285,7 @@ export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerm
           worktreePath={effectiveWorktreePath}
           runtimeEnv={runtimeEnv}
           visible={visible}
-          height={terminalUiState.terminalHeight}
+          height={drawerHeightOf(terminalUiState)}
           // Known-session order is MRU and changes on focus; persisted store order keeps sidebar labels stable.
           terminalIds={canOperateTerminal ? terminalUiState.terminalIds : serverOrderedTerminalIds}
           activeTerminalId={terminalUiState.activeTerminalId}
@@ -294,7 +302,7 @@ export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerm
           keybindings={keybindings}
           onActiveTerminalChange={activateTerminal}
           onCloseTerminal={closeTerminal}
-          onHeightChange={setTerminalHeight}
+          onHeightChange={setDrawerHeight}
           onAddTerminalContext={handleAddTerminalContext}
           terminalLabelsById={terminalLabelsById}
           terminalLaunchLocationsById={terminalLaunchLocationsById}
@@ -306,10 +314,12 @@ export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerm
                 <UsageDrawerBody
                   threadKey={scopedThreadKey(threadRef)}
                   threadEnvironmentId={threadRef.environmentId}
+                  threadInstanceId={serverThread?.providerInstanceId ?? null}
                   contextWindow={contextWindow}
                 />
               ) : null,
             usageActions: <UsageDrawerActions />,
+            fitRequestId: extrasRequestId,
           }}
         />
       </div>

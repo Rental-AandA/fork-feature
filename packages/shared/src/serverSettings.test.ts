@@ -725,6 +725,28 @@ describe("serverSettings helpers", () => {
     expect(Object.keys(removed.usageLimitSources)).toEqual([hubB]);
   });
 
+  it("replaces account rotation per driver so a shortened order really shrinks", () => {
+    const codex = ProviderDriverKind.make("codex");
+    const claude = ProviderDriverKind.make("claudeAgent");
+    const one = ProviderInstanceId.make("codex-one");
+    const two = ProviderInstanceId.make("codex-two");
+    const current = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      usageRotation: {
+        [codex]: { enabled: true, strategy: "order", order: [one, two] },
+        [claude]: { enabled: true, strategy: "most-remaining", order: [] },
+      },
+    });
+    const shortened = applyServerSettingsPatch(current, {
+      usageRotation: { [codex]: { enabled: true, strategy: "order", order: [two] } },
+    });
+    expect(shortened.usageRotation[codex]?.order).toEqual([two]);
+    expect(shortened.usageRotation[claude]?.strategy).toBe("most-remaining");
+    expect(
+      applyServerSettingsPatch(shortened, { usageRotation: { [codex]: null } }).usageRotation,
+    ).toEqual({ [claude]: { enabled: true, strategy: "most-remaining", order: [] } });
+    expect(DEFAULT_SERVER_SETTINGS.usageRotation).toEqual({});
+  });
+
   it("replaces and removes individual usage prices without clobbering other models", () => {
     const prices = { inputCostPerMillionTokens: 2, outputCostPerMillionTokens: 8 };
     const current = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {

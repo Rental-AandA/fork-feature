@@ -61,6 +61,7 @@ import {
   GROK_MODEL_SELECTION,
 } from "./fixtures/shared.ts";
 import * as ProviderReplayHarness from "./ProviderReplayHarness.ts";
+import { planLimitFailover } from "../UsageLimitFailover.ts";
 import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
@@ -113,6 +114,7 @@ function makeTestAdapter(input: {
     Record<number, Omit<OrchestrationV2ProviderTurnTokenUsage, "updatedAt">>
   >;
   readonly failedRunOrdinals?: ReadonlySet<number>;
+  readonly failureClass?: "usage_limit";
   readonly interruptedRunOrdinals?: ReadonlySet<number>;
   readonly holdRunOrdinal?: number;
   readonly holdFirstTurn?: Deferred.Deferred<void>;
@@ -330,11 +332,19 @@ function makeTestAdapter(input: {
                     ? {
                         status: terminalStatus,
                         failureItemOrdinal: turnInput.runOrdinal * 100 + 2,
-                        failure: makeProviderFailure({
-                          message: "Simulated provider failure.",
-                          code: "simulated_failure",
-                          class: "provider_error",
-                        }),
+                        failure:
+                          input.failureClass === "usage_limit"
+                            ? makeProviderFailure({
+                                message: "Usage limit reached.",
+                                code: "usage_limit",
+                                class: "usage_limit",
+                                resetAt: "2099-01-01T00:00:00.000Z",
+                              })
+                            : makeProviderFailure({
+                                message: "Simulated provider failure.",
+                                code: "simulated_failure",
+                                class: "provider_error",
+                              }),
                       }
                     : { status: terminalStatus, failure: null }),
                   threadDisposition: "reusable",
@@ -3537,5 +3547,231 @@ describe("orchestration v2 provider switching", () => {
         );
       }),
     ),
+  );
+});
+
+describe("usage-limit account rotation", () => {
+  it.live.each([
+    {
+      label: "shared conversations",
+      sourceKey: "claude:sessions:/shared/projects",
+      targetKey: "claude:sessions:/shared/projects",
+    },
+    {
+      label: "separate homes",
+      sourceKey: "claude:home:/accounts/one",
+      targetKey: "claude:home:/accounts/two",
+    },
+  ])(
+    "continues a limited Claude thread on the next account with $label",
+    ({ sourceKey, targetKey }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const shared = sourceKey === targetKey;
+          const cwd = yield* checkpointWorkspace(`limit-failover-${shared}`);
+          const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+          const injectedHistory = yield* Ref.make<ReadonlyArray<unknown>>([]);
+          const source = CLAUDE_MODEL_SELECTION;
+          const target: ModelSelection = {
+            ...CLAUDE_MODEL_SELECTION,
+            instanceId: ProviderInstanceId.make("claude-account-two"),
+          };
+          const adapters = [
+            makeTestAdapter({
+              instanceId: source.instanceId,
+              driver: CLAUDE_DRIVER,
+              capabilities: ClaudeProviderCapabilitiesV2,
+              modelSelection: source,
+              responseByRunOrdinal: {},
+              capturedTurns,
+              failedRunOrdinals: new Set([1]),
+              failureClass: "usage_limit",
+            }),
+            makeTestAdapter({
+              instanceId: target.instanceId,
+              driver: CLAUDE_DRIVER,
+              capabilities: ClaudeProviderCapabilitiesV2,
+              modelSelection: target,
+              responseByRunOrdinal: { 2: "Continued on account two" },
+              capturedTurns,
+              injectedHistory,
+              // A fresh native session on this account gets its own id.
+              nativeThreadGeneration: yield* Ref.make(1),
+            }),
+          ];
+          const layerRegistry = Layer.succeed(
+            ProviderAdapterRegistry.ProviderAdapterRegistryV2,
+            ProviderAdapterRegistry.ProviderAdapterRegistryV2.of({
+              get: (instanceId) => {
+                const adapter = adapters.find((candidate) => candidate.instanceId === instanceId);
+                return adapter === undefined
+                  ? Effect.fail(
+                      new ProviderAdapterRegistry.ProviderAdapterRegistryLookupError({
+                        instanceId,
+                      }),
+                    )
+                  : Effect.succeed(adapter);
+              },
+              list: () => Effect.succeed(adapters.map((adapter) => adapter.instanceId)),
+              getMetadata: (instanceId) =>
+                adapters.some((candidate) => candidate.instanceId === instanceId)
+                  ? Effect.succeed({
+                      driver: CLAUDE_DRIVER,
+                      continuationKey: instanceId === source.instanceId ? sourceKey : targetKey,
+                      enabled: true,
+                      capabilities: ClaudeProviderCapabilitiesV2,
+                    })
+                  : Effect.fail(
+                      new ProviderAdapterRegistry.ProviderAdapterRegistryLookupError({
+                        instanceId,
+                      }),
+                    ),
+            }),
+          );
+          const limitedThreadId = ThreadId.make(`thread:limit-failover:${shared}`);
+          const accountSnapshot = (instanceId: ProviderInstanceId, usedPercent: number) => ({
+            instanceId,
+            driver: CLAUDE_DRIVER,
+            enabled: true,
+            installed: true,
+            version: "1.0.0",
+            status: "ready" as const,
+            auth: { status: "authenticated" as const },
+            checkedAt: "2026-10-20T12:00:00.000Z",
+            models: [
+              {
+                slug: CLAUDE_MODEL_SELECTION.model,
+                name: "Sonnet",
+                isCustom: false,
+                capabilities: null,
+              },
+            ],
+            slashCommands: [],
+            skills: [],
+            usageLimits: {
+              checkedAt: "2026-10-20T12:00:00.000Z",
+              windows: [{ id: "weekly", kind: "weekly" as const, label: "Weekly", usedPercent }],
+            },
+          });
+          const projection = yield* Effect.gen(function* () {
+            const orchestrator = yield* Orchestrator.OrchestratorV2;
+            const projections = yield* ProjectionStore.ProjectionStoreV2;
+            const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+            yield* orchestrator.dispatch({
+              type: "thread.create",
+              createdBy: "user",
+              creationSource: "web",
+              commandId: CommandId.make(`command:limit-failover:${shared}:create`),
+              threadId: limitedThreadId,
+              projectId: ProjectId.make("project:limit-failover"),
+              title: "Limited thread",
+              modelSelection: source,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: cwd,
+            });
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              createdBy: "user",
+              creationSource: "web",
+              commandId: CommandId.make(`command:limit-failover:${shared}:first`),
+              threadId: limitedThreadId,
+              messageId: MessageId.make(`message:limit-failover:${shared}:first`),
+              text: "Refactor the parser",
+              attachments: [],
+              modelSelection: source,
+              dispatchMode: { type: "start_immediately" },
+            });
+            const awaitRun = (ordinal: number, status: "failed" | "completed") =>
+              orchestrator.streamStoredEvents.pipe(
+                Stream.filter(
+                  (event) =>
+                    event.event.type === "run.updated" &&
+                    event.event.threadId === limitedThreadId &&
+                    event.event.payload.ordinal === ordinal &&
+                    event.event.payload.status === status,
+                ),
+                Stream.runHead,
+              );
+            yield* awaitRun(1, "failed");
+            yield* worker.drain();
+            const candidate = (yield* projections.getLimitFailoverCandidates()).find(
+              (thread) => thread.id === limitedThreadId,
+            );
+            assert.isDefined(candidate);
+            const plan = planLimitFailover({
+              thread: candidate!,
+              rotation: {
+                [CLAUDE_DRIVER]: {
+                  enabled: true,
+                  strategy: "order",
+                  order: [source.instanceId, target.instanceId],
+                },
+              },
+              providers: [
+                accountSnapshot(source.instanceId, 100),
+                accountSnapshot(target.instanceId, 10),
+              ],
+              cooldowns: new Map(),
+              nowMs: DateTime.toEpochMillis(yield* DateTime.now),
+              enabledForThread: () => true,
+            });
+            if (plan.type !== "dispatch") return yield* Effect.die(`no failover: ${plan.reason}`);
+            yield* orchestrator.dispatch(plan.command);
+            // The sweep repeats every few seconds; the same command id never starts a second run.
+            yield* orchestrator.dispatch(plan.command).pipe(Effect.exit);
+            yield* awaitRun(2, "completed");
+            yield* worker.drain();
+            return yield* orchestrator.getThreadProjection(limitedThreadId);
+          }).pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)),
+                ProviderReplayHarness.layerWithRegistry(
+                  {
+                    name: `limit-failover-${shared}`,
+                    runtimePolicyOverride: {
+                      cwd,
+                      approvalPolicy: "never",
+                      sandboxPolicy: {
+                        type: "readOnly",
+                        access: { type: "fullAccess" },
+                        networkAccess: false,
+                      },
+                    },
+                  },
+                  layerRegistry,
+                  { databaseLayer: SqlitePersistence.layerMemory },
+                ),
+              ),
+            ),
+          );
+          assert.deepEqual(
+            projection.runs.map((run) => [run.providerInstanceId, run.status]),
+            [
+              [source.instanceId, "failed"],
+              [target.instanceId, "completed"],
+            ],
+          );
+          assert.equal(projection.thread.providerInstanceId, target.instanceId);
+          const turns = yield* Ref.get(capturedTurns);
+          assert.deepEqual(
+            turns.map((turn) => turn.text),
+            ["Refactor the parser", "Continue where you left off."],
+          );
+          if (shared) {
+            // Native resume: the second account continues the same Claude session with full history.
+            assert.equal(turns[1]?.nativeThreadId, turns[0]?.nativeThreadId);
+            assert.lengthOf(projection.contextHandoffs, 0);
+          } else {
+            // Separate homes cannot read the other transcript, so the context is handed off.
+            assert.notEqual(turns[1]?.nativeThreadId, turns[0]?.nativeThreadId);
+            assert.lengthOf(projection.contextHandoffs, 1);
+            // The request of the limited turn still reaches the next account.
+            assert.include(JSON.stringify(yield* Ref.get(injectedHistory)), "Refactor the parser");
+          }
+        }),
+      ),
   );
 });

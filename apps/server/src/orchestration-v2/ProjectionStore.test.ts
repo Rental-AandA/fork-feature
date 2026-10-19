@@ -3636,6 +3636,19 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           });
         } else assert.isUndefined(candidate);
         assert.isUndefined(candidates.find((row) => row.id === otherThreadId));
+        const failovers = yield* store.getLimitFailoverCandidates();
+        const failover = failovers.find((row) => row.id === threadId);
+        if (lastErrorClass === "usage_limit") {
+          assert.deepEqual(failover?.latestRun, {
+            id: original.id,
+            providerInstanceId: original.providerInstanceId,
+            modelSelection: original.modelSelection,
+          });
+          assert.equal(failover?.providerInstanceId, sqlShell.providerInstanceId);
+          assert.equal(failover?.usageLimitResetAt, sqlShell.usageLimitResetAt);
+          assert.deepEqual(failover?.lineage, sqlShell.lineage);
+        } else assert.isUndefined(failover);
+        assert.isUndefined(failovers.find((row) => row.id === otherThreadId));
       });
       yield* store.apply({
         id: EventId.make("event:limit-shell:error"),

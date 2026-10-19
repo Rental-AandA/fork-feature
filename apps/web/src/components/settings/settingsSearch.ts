@@ -644,6 +644,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     providerSettingsOnly: true,
   },
   {
+    id: "usage-rotation",
+    title: "Account rotation",
+    to: "/settings/providers",
+    searchTerms: [
+      "usage limit rotate switch account failover next subscription quota reset continue codex claude",
+    ],
+    providerSettingsOnly: true,
+  },
+  {
     id: "cursor-keychain-usage",
     title: "Cursor account usage",
     to: "/settings/providers",

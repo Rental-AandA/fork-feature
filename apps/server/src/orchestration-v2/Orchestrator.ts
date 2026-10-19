@@ -127,6 +127,7 @@ import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
+import { isLimitFailoverMessageId } from "./UsageLimitFailover.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import {
@@ -1281,7 +1282,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   const startNextQueuedRun = (
     threadId: ThreadId,
-    options?: { readonly failedRunId?: RunId; readonly endedRunId?: RunId },
+    options?: {
+      readonly failedRunId?: RunId;
+      readonly endedRunId?: RunId;
+      readonly resumedByUser?: boolean;
+    },
   ) =>
     Effect.gen(function* () {
       if (!(yield* projectionStore.canStartQueuedRun(threadId))) return;
@@ -1337,9 +1342,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         projectOverride !== undefined
           ? !projectOverride
           : machineInstance !== undefined && !resolveProviderInstanceEnabled(machineInstance);
+      // Rotation moved the thread off a limited account. Messages queued for
+      // that account would switch straight back to it, so they wait for the user.
+      const queuedForAccountLeftByFailover =
+        options?.resumedByUser !== true &&
+        failedRun?.userMessageId !== undefined &&
+        isLimitFailoverMessageId(failedRun.userMessageId) &&
+        failedRun.providerInstanceId !== queuedRun.providerInstanceId;
       if (
         worktreeMissing ||
         instanceDisabledForProject ||
+        queuedForAccountLeftByFailover ||
         (failureClass !== undefined &&
           failureClass !== "validation_error" &&
           failedRun?.providerInstanceId === queuedRun.providerInstanceId)
@@ -11346,7 +11359,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
       );
       if (command.type === "queue.resume") {
-        yield* mapDispatchError(command)(startNextQueuedRun(command.threadId));
+        yield* mapDispatchError(command)(
+          startNextQueuedRun(command.threadId, { resumedByUser: true }),
+        );
       }
       return {
         sequence: receipt.resultSequence,
@@ -11479,7 +11494,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     }
     if (command.type === "queue.resume") {
-      yield* mapDispatchError(command)(startNextQueuedRun(command.threadId));
+      yield* mapDispatchError(command)(
+        startNextQueuedRun(command.threadId, { resumedByUser: true }),
+      );
     }
     if (command.type === "notification.delivery.accept") {
       yield* mapDispatchError(command)(offerDelegatedCompletionDeliveries(command.threadId));

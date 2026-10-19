@@ -128,6 +128,25 @@ or endpoint configurations do not report subscription limits.
 API-key accounts may not report subscription limits. This also applies to Claude connections
 using a proxy through `ANTHROPIC_AUTH_TOKEN`.
 
+## Rotate accounts when a limit hits
+
+With two or more accounts of the same provider, open **Settings > Providers > Account rotation**,
+turn on rotation for that provider, and tick the accounts a limited thread may move to. Only ticked
+accounts take part, so an API-key instance never starts paying for work unless you add it. When a
+thread stops on a usage limit, it continues on the next ticked account that is signed in and has
+usage left, in list order or by the earliest weekly reset or most usage left. An account that just
+hit its limit sits out until its reset. When every account is limited, the thread waits for its
+reset as before. Reset credits are never used automatically.
+
+Rotation leaves a thread alone when you changed its model after the stop, snoozed it, or it waits
+on a question. Messages you queued for the limited account are held instead of sending them back to
+it; resume the queue to send them anyway. Whether the new account sees the whole conversation
+depends on the provider: Claude needs a [shared conversations folder](./providers-claude.md#keep-the-full-conversation-across-accounts),
+Codex a shared `CODEX_HOME` with a shadow home per account. Otherwise it receives a summary.
+
+Web and desktop also tell you once when a limited account becomes available again, resets early,
+moves its reset earlier, or gains a reset credit, using your notification settings.
+
 ## Connect a usage source
 
 Open **Settings → Providers → Usage providers → Add source** and pick the kind of source. Choose the

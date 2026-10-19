@@ -1,5 +1,7 @@
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
+import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -20,6 +22,7 @@ import {
   type OrchestrationV2Run,
   ProjectId,
   type PullRequestDetail,
+  type ServerProvider,
   type PullRequestComment,
   PullRequestOperationError,
   ProviderDriverKind,
@@ -6383,3 +6386,229 @@ it.layer(layerQueueResumeDisabledInstanceTest)(
     );
   },
 );
+
+const layerRotationTest = Layer.mergeAll(
+  RuntimeLayer.layer,
+  RuntimeLayer.layerEventSink,
+  ProjectStore.layer,
+  ProjectionStore.layer,
+  EffectOutbox.layer,
+  ThreadCommandExecutor.layer,
+).pipe(
+  Layer.provide(McpSessionRegistryTestkit.layer),
+  Layer.provide(McpProviderSessions.layer),
+  Layer.provide(SqlitePersistence.layerMemory),
+  Layer.provide(layerCheckpointStoreTest),
+  Layer.provide(layerServerConfig),
+  Layer.provideMerge(
+    ServerSettings.layerTest({
+      providerInstances: { [alternateInstanceId]: { driver, enabled: true } },
+      usageRotation: {
+        [driver]: {
+          enabled: true,
+          strategy: "order",
+          order: [modelSelection.instanceId, alternateInstanceId],
+        },
+      },
+    }),
+  ),
+  Layer.provide(layerTestProviderInstanceRegistry),
+  Layer.provide(layerGitWorkflowTest),
+  Layer.provide(layerProjectServiceTest),
+  Layer.provide(layerPlatformTest),
+);
+
+const usageSnapshot = (instanceId: ProviderInstanceId, usedPercent: number): ServerProvider => ({
+  instanceId,
+  driver,
+  enabled: true,
+  installed: true,
+  version: "1.0.0",
+  status: "ready",
+  auth: { status: "authenticated" },
+  checkedAt: "2026-10-20T12:00:00.000Z",
+  models: [{ slug: modelSelection.model, name: "GPT", isCustom: false, capabilities: null }],
+  slashCommands: [],
+  skills: [],
+  usageLimits: {
+    checkedAt: "2026-10-20T12:00:00.000Z",
+    windows: [{ id: "weekly", kind: "weekly", label: "Weekly", usedPercent }],
+  },
+});
+// Usage bars as the registry last saw them: the alternate account still looks open.
+const sweep = UsageLimitRecoveryWorker.makeSweep.pipe(
+  Effect.provide(
+    Layer.mock(ProviderRegistry.ProviderRegistry)({
+      getProviders: Effect.succeed([
+        usageSnapshot(modelSelection.instanceId, 100),
+        usageSnapshot(alternateInstanceId, 10),
+      ]),
+    }),
+  ),
+);
+const limitRun = (threadId: ThreadId, run: OrchestrationV2Run, now: DateTime.Utc) =>
+  Effect.flatMap(EventSink.EventSinkV2, (events) =>
+    events.write({
+      events: [
+        {
+          id: EventId.make(`rotation:error:${run.id}`),
+          type: "turn-item.updated",
+          threadId,
+          occurredAt: now,
+          payload: {
+            id: TurnItemId.make(`rotation:error:${run.id}`),
+            type: "error",
+            threadId,
+            runId: run.id,
+            nodeId: run.rootNodeId,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: run.ordinal * 100 + 2,
+            status: "failed",
+            title: "Usage limit reached",
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            failure: {
+              class: "usage_limit",
+              message: "Plan limit reached.",
+              code: "usageLimitExceeded",
+              retryable: null,
+              resetAt: DateTime.formatIso(DateTime.add(now, { hours: 3 })),
+            },
+          },
+        },
+        {
+          id: EventId.make(`rotation:failed:${run.id}`),
+          type: "run.updated",
+          threadId,
+          occurredAt: now,
+          payload: { ...run, status: "failed", completedAt: now },
+        },
+      ],
+    }),
+  );
+
+const startLimitedThread = (name: string) =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const threadId = ThreadId.make(`rotation:${name}`);
+    const projectId = ProjectId.make(`rotation:project:${name}`);
+    const now = yield* DateTime.now;
+    yield* seedProject({
+      projectId,
+      title: "Rotation project",
+      workspaceRoot: process.cwd(),
+      defaultModelSelection: modelSelection,
+      createdAt: DateTime.formatIso(now),
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make(`rotation:create:${name}`),
+      threadId,
+      projectId,
+      title: "Limited thread",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    for (const [suffix, dispatchMode] of [
+      ["start", { type: "defer_start" }],
+      ["queue", { type: "queue_after_active" }],
+    ] as const) {
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`rotation:${suffix}:${name}`),
+        threadId,
+        messageId: MessageId.make(`rotation:${suffix}:${name}`),
+        text: suffix === "start" ? "Start work." : "Follow up.",
+        attachments: [],
+        dispatchMode,
+        createdBy: "user",
+        creationSource: "web",
+      });
+    }
+    const [source] = (yield* orchestrator.getThreadProjection(threadId)).runs;
+    yield* limitRun(threadId, source!, now);
+    return threadId;
+  });
+
+it.layer(layerRotationTest)("usage-limit account rotation", (it) => {
+  it.effect("moves a limited thread to the next account once and waits when all are limited", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = yield* startLimitedThread("chain");
+      const runSweep = yield* sweep;
+      yield* runSweep();
+      const moved = yield* orchestrator.getThreadProjection(threadId);
+      assert.deepEqual(
+        moved.runs.map((run) => [run.providerInstanceId, run.status]),
+        [
+          [modelSelection.instanceId, "failed"],
+          [modelSelection.instanceId, "queued"],
+          [alternateInstanceId, "starting"],
+        ],
+      );
+      assert.equal(moved.thread.providerInstanceId, alternateInstanceId);
+      // A repeated sweep, or a fresh worker after a restart, never starts a second continuation.
+      yield* runSweep();
+      yield* (yield* sweep)();
+      assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 3);
+
+      // The alternate account hits its limit too. Its usage bar has not caught up,
+      // but the first account is still cooling down, so the thread waits for a reset.
+      yield* limitRun(threadId, moved.runs[2]!, yield* DateTime.now);
+      yield* runSweep();
+      const waiting = yield* orchestrator.getThreadProjection(threadId);
+      assert.lengthOf(waiting.runs, 3);
+      assert.equal(waiting.thread.providerInstanceId, alternateInstanceId);
+    }),
+  );
+});
+
+it.layer(layerRotationTest)("usage-limit account rotation with queued messages", (it) => {
+  it.effect("holds messages queued for the limited account instead of switching back", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const events = yield* EventSink.EventSinkV2;
+      const threadId = yield* startLimitedThread("queue");
+      yield* (yield* sweep)();
+      const moved = yield* orchestrator.getThreadProjection(threadId);
+      const continuation = moved.runs[2]!;
+      assert.equal(continuation.providerInstanceId, alternateInstanceId);
+      const now = yield* DateTime.now;
+      yield* events.write({
+        events: [
+          {
+            id: EventId.make("rotation:queue:continuation-complete"),
+            type: "run.updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...continuation, status: "completed", completedAt: now },
+          },
+        ],
+      });
+      yield* orchestrator.resumeQueuedRuns;
+      const held = (yield* orchestrator.getThreadProjection(threadId)).runs[1]!;
+      assert.equal(held.status, "queued");
+      assert.isTrue(held.queueHeld);
+      // The user can still send it to that account on purpose.
+      yield* orchestrator.dispatch({
+        type: "queue.resume",
+        commandId: CommandId.make("rotation:queue:resume"),
+        threadId,
+      });
+      const resumed = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+        (run) => run.id === held.id,
+      )!;
+      assert.notEqual(resumed.status, "queued");
+      assert.equal(resumed.providerInstanceId, modelSelection.instanceId);
+    }),
+  );
+});

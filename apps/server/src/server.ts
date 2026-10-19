@@ -97,6 +97,7 @@ import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
 import * as ProviderUsageLimitsIngestion from "./provider/ProviderUsageLimitsIngestion.ts";
 import * as HiggsfieldConnect from "./usage/HiggsfieldConnect.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
+import * as UsageAvailabilityWatcher from "./provider/UsageAvailabilityWatcher.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
@@ -610,6 +611,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       EnvironmentTheme.layer,
       UsageLimitSources.layer,
       HiggsfieldConnect.layer,
+      UsageAvailabilityWatcher.layer,
     ),
   ),
   Layer.provideMerge(ProviderRegistry.layer),

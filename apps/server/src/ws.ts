@@ -256,6 +256,7 @@ import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
 import * as HiggsfieldConnect from "./usage/HiggsfieldConnect.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
+import * as UsageAvailabilityWatcher from "./provider/UsageAvailabilityWatcher.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
@@ -1227,6 +1228,7 @@ const layerWsRpc = (
       const usage = yield* UsageService.UsageService;
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
       const higgsfieldConnect = yield* HiggsfieldConnect.HiggsfieldConnect;
+      const usageAvailability = yield* UsageAvailabilityWatcher.UsageAvailabilityWatcher;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
       const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
@@ -1659,7 +1661,9 @@ const layerWsRpc = (
       const loadServerConfig = (options: { readonly usageLimitsCommand: boolean }) =>
         Effect.gen(function* () {
           const keybindingsConfig = yield* keybindings.loadConfigState;
-          const currentProviders = yield* providerRegistry.getProviders;
+          const currentProviders = yield* usageAvailability.decorate(
+            yield* providerRegistry.getProviders,
+          );
           const providers = options.usageLimitsCommand
             ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
             : currentProviders;
@@ -2940,9 +2944,11 @@ const layerWsRpc = (
                 // The registry stream carries changes only. Seed it with the current
                 // providers so a source refresh that lands before any provider change
                 // still pairs up and reaches the client.
-                Stream.concat(
-                  Stream.fromEffect(providerRegistry.getProviders),
-                  providerRegistry.streamChanges,
+                usageAvailability.decorateStream(
+                  Stream.concat(
+                    Stream.fromEffect(providerRegistry.getProviders),
+                    providerRegistry.streamChanges,
+                  ),
                 ),
                 usageLimitSources.streamChanges.pipe(
                   Stream.changesWith(

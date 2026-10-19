@@ -29,10 +29,30 @@ custom setting changes `CLAUDE_CONFIG_DIR`, leaving `HOME` and the system keycha
 location intact. Use the same variable for the login command. Setting `HOME`
 instead can put credentials where this provider will not find them.
 
-Check the account reported in provider settings after signing in. Existing
-threads can switch only between Claude instances with the same config directory.
-Separate account directories stay isolated, including their local conversation
-state. Claude does not have Codex's shared-home and shadow-home arrangement.
+Check the account reported in provider settings after signing in. Separate
+account directories keep their conversations apart, so switching a thread to
+another account hands over a summary of the history instead of the full
+conversation.
+
+### Keep the full conversation across accounts
+
+Claude stores conversations in the `projects` folder of its config directory.
+Share that folder between accounts to let a thread continue on another account
+with its complete history. With the environment stopped, move any conversations
+from an extra account's `projects` folder into the default one, then replace the
+folder with a link:
+
+```bash
+# macOS and Linux
+ln -s ~/.claude/projects ~/.claude_personal/projects
+# Windows (Command Prompt)
+mklink /J %USERPROFILE%\.claude_personal\projects %USERPROFILE%\.claude\projects
+```
+
+Then set **Shared conversations path** to `~/.claude/projects` on every Claude
+instance that uses it, including the default one. An instance whose `projects`
+folder does not lead to that path keeps handing over summaries. Claude's prompt
+cache still belongs to each account, so the first turn after a switch costs more.
 
 For presets that differ only in API keys or endpoints, use the instance's
 **Environment variables**. Variable assignments do not belong in **Launch arguments**.

@@ -19,6 +19,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as UsageLimitRecoveryWorker from "../orchestration-v2/UsageLimitRecoveryWorker.ts";
@@ -119,6 +120,7 @@ it.effect.each(["on time", "after restart"])(
           getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
         }),
         Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
       );
       const layerWorkers = Layer.mergeAll(
         ScheduledTasks.layer,

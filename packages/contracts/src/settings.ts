@@ -805,10 +805,57 @@ export const CanvaUsageLimitSourceConfig = Schema.Struct({
 });
 export type CanvaUsageLimitSourceConfig = typeof CanvaUsageLimitSourceConfig.Type;
 
+const usageLimitApiKey = TrimmedString.pipe(
+  Schema.withDecodingDefault(Effect.succeed("")),
+  secretSetting,
+);
+
+/** Balance needs a key with billing permission (BILLING or FULL preset); a plain API key is refused. */
+export const FalUsageLimitSourceConfig = Schema.Struct({
+  kind: Schema.Literal("fal"),
+  label: Schema.optional(TrimmedNonEmptyString),
+  apiKey: usageLimitApiKey,
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type FalUsageLimitSourceConfig = typeof FalUsageLimitSourceConfig.Type;
+
+export const DeepSeekUsageLimitSourceConfig = Schema.Struct({
+  kind: Schema.Literal("deepseek"),
+  label: Schema.optional(TrimmedNonEmptyString),
+  apiKey: usageLimitApiKey,
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type DeepSeekUsageLimitSourceConfig = typeof DeepSeekUsageLimitSourceConfig.Type;
+
+/** The account balance needs a management key; the API key alone only reports its own spend. */
+export const OpenRouterUsageLimitSourceConfig = Schema.Struct({
+  kind: Schema.Literal("openrouter"),
+  label: Schema.optional(TrimmedNonEmptyString),
+  apiKey: usageLimitApiKey,
+  managementKey: usageLimitApiKey,
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type OpenRouterUsageLimitSourceConfig = typeof OpenRouterUsageLimitSourceConfig.Type;
+
+// TypeSafe (Jev) has no balance API; spend can only be counted locally from reported tokens.
+export const TypesafeUsageLimitSourceConfig = Schema.Struct({
+  kind: Schema.Literal("typesafe"),
+  label: Schema.optional(TrimmedNonEmptyString),
+  /** USD the user bought, entered by hand. */
+  startCredit: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
+  startDate: Schema.optional(TrimmedNonEmptyString),
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type TypesafeUsageLimitSourceConfig = typeof TypesafeUsageLimitSourceConfig.Type;
+
 export const UsageLimitSourceConfig = Schema.Union([
   CliproxyUsageLimitSourceConfig,
   ElevenLabsUsageLimitSourceConfig,
   CanvaUsageLimitSourceConfig,
+  FalUsageLimitSourceConfig,
+  DeepSeekUsageLimitSourceConfig,
+  OpenRouterUsageLimitSourceConfig,
+  TypesafeUsageLimitSourceConfig,
 ]);
 export type UsageLimitSourceConfig = typeof UsageLimitSourceConfig.Type;
 export type UsageLimitSourceKind = UsageLimitSourceConfig["kind"];

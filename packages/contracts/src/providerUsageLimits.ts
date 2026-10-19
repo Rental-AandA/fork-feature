@@ -9,6 +9,8 @@ import {
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
 
+const NonNegativeAmount = Schema.Number.check(Schema.isGreaterThanOrEqualTo(0));
+
 /**
  * `id` is stable per provider (`five_hour`, `seven_day_opus`, `primary`) so a
  * sparse turn-driven update lands on the same row a full probe produced.
@@ -20,9 +22,13 @@ export const ServerProviderUsageWindow = Schema.Struct({
   usedPercent: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
   resetsAt: Schema.optional(IsoDateTime),
   windowDurationMins: Schema.optional(NonNegativeInt),
-  /** Absolute allowance for sources that meter in units (characters, credits), not only percent. */
-  remaining: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
-  limit: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
+  /**
+   * Absolute allowance for sources that meter in units (characters, credits) or money. A money
+   * window's unit is an ISO currency code; without a known limit it reports `usedPercent` 0 and
+   * clients show the amount instead of a percentage.
+   */
+  remaining: Schema.optional(NonNegativeAmount),
+  limit: Schema.optional(NonNegativeAmount),
   unit: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerProviderUsageWindow = typeof ServerProviderUsageWindow.Type;
@@ -57,6 +63,15 @@ export const ServerProviderUsageLimits = Schema.Struct({
       message: Schema.optional(TrimmedNonEmptyString),
     }),
   ),
+  /** Money spent in the current UTC day, week and month, for sources that report or derive it. */
+  spend: Schema.optional(
+    Schema.Struct({
+      currency: TrimmedNonEmptyString,
+      day: Schema.optional(NonNegativeAmount),
+      week: Schema.optional(NonNegativeAmount),
+      month: Schema.optional(NonNegativeAmount),
+    }),
+  ),
 });
 export type ServerProviderUsageLimits = typeof ServerProviderUsageLimits.Type;
 
@@ -82,7 +97,15 @@ export type UsageLimitSourceAccount = typeof UsageLimitSourceAccount.Type;
 
 export const UsageLimitSourceSnapshot = Schema.Struct({
   id: UsageLimitSourceId,
-  kind: Schema.Literals(["cliproxy", "elevenlabs", "canva"]),
+  kind: Schema.Literals([
+    "cliproxy",
+    "elevenlabs",
+    "canva",
+    "fal",
+    "deepseek",
+    "openrouter",
+    "typesafe",
+  ]),
   label: TrimmedNonEmptyString,
   checkedAt: IsoDateTime,
   accounts: ForwardCompatibleArray(UsageLimitSourceAccount),

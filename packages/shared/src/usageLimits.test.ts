@@ -17,6 +17,7 @@ import {
   collectExternalUsageLinks,
   collectLimitNotices,
   collectLimitPools,
+  collectMoneyAccounts,
   displayLimitWindows,
   elapsedShare,
   formatResetsIn,
@@ -1150,10 +1151,10 @@ describe("usage source credits", () => {
     const characters = { ...window, remaining: 75_000, limit: 100_000, unit: "characters" };
     const format = (value: number) => value.toLocaleString();
     expect(remainingAmountLabel([characters])).toBe(
-      `${format(75_000)} von ${format(100_000)} characters übrig`,
+      `${format(75_000)} of ${format(100_000)} characters left`,
     );
     expect(remainingAmountLabel([characters, { ...characters, remaining: 5, limit: 10 }])).toBe(
-      `${format(75_005)} von ${format(100_010)} characters übrig`,
+      `${format(75_005)} of ${format(100_010)} characters left`,
     );
     expect(remainingAmountLabel([window])).toBeNull();
     expect(remainingAmountLabel([characters, { ...characters, unit: "credits" }])).toBeNull();
@@ -1183,10 +1184,10 @@ describe("usage source credits", () => {
                       windows: [],
                       unavailable: {
                         reason: "unsupported" as const,
-                        message: "Nur in der Abrechnung",
+                        message: "Only on the billing page",
                       },
                       externalUsage: {
-                        label: "Canva-Abrechnung",
+                        label: "Canva billing",
                         url: "https://canva.test/billing",
                       },
                     },
@@ -1200,14 +1201,117 @@ describe("usage source credits", () => {
     ]);
     expect(collectExternalUsageLinks(presentations)).toEqual([
       {
-        label: "Canva-Abrechnung",
+        label: "Canva billing",
         url: "https://canva.test/billing",
-        message: "Nur in der Abrechnung",
+        message: "Only on the billing page",
         accounts: ["Canva on Laptop"],
       },
     ]);
     expect(collectLimitAccounts(presentations)).toEqual([]);
     expect(collectLimitNotices(presentations)).toEqual([]);
+  });
+});
+
+describe("money sources", () => {
+  const checkedAt = "2026-10-20T11:00:00.000Z";
+  const balance = {
+    id: "balance",
+    kind: "other",
+    label: "Balance",
+    usedPercent: 0,
+    remaining: 12.4,
+    unit: "USD",
+  } as const;
+  const source = (accounts: ReadonlyArray<Record<string, unknown>>, label = "Money") => ({
+    id: UsageLimitSourceId.make(label.toLowerCase()),
+    kind: "fal" as const,
+    label,
+    checkedAt,
+    accounts: accounts.map((account) => ({
+      driver: ProviderDriverKind.make("fal"),
+      ...account,
+    })) as never,
+  });
+  const presentations = (sources: ReadonlyArray<ReturnType<typeof source>>) =>
+    new Map([
+      [
+        EnvironmentId.make("env-a"),
+        {
+          entry: { target: { label: "Laptop" } },
+          serverConfig: { providers: [], usageLimitSources: sources },
+        },
+      ],
+    ]);
+
+  it("shows balances and spend as amounts and keeps them out of the quota pools", () => {
+    const input = presentations([
+      source([
+        {
+          id: "fal",
+          usageLimits: {
+            checkedAt,
+            windows: [balance],
+            spend: { currency: "USD", day: 0.8, month: 7.1 },
+          },
+        },
+        {
+          id: "OpenRouter",
+          driver: ProviderDriverKind.make("openrouter"),
+          usageLimits: { checkedAt, windows: [], spend: { currency: "USD", day: 0.25 } },
+        },
+        {
+          id: "Credits",
+          driver: ProviderDriverKind.make("openrouter-credits"),
+          usageLimits: {
+            checkedAt,
+            windows: [{ ...balance, id: "credits", usedPercent: 25, remaining: 75, limit: 100 }],
+          },
+        },
+      ]),
+    ]);
+    const accounts = collectLimitAccounts(input);
+    expect(collectMoneyAccounts(accounts).map(({ summary }) => summary)).toEqual([
+      "$12.40 left · today $0.80 · month $7.10",
+      "today $0.25",
+      "$75.00 of $100.00 left",
+    ]);
+    expect(collectLimitPools(accounts, now)).toEqual([]);
+    expect(collectLimitNotices(input)).toEqual([]);
+  });
+
+  it("keeps an unreadable account visible as a notice instead of dropping it", () => {
+    const input = presentations([
+      source(
+        [
+          {
+            id: "ElevenLabs",
+            driver: ProviderDriverKind.make("elevenlabs"),
+            usageLimits: {
+              checkedAt,
+              windows: [],
+              unavailable: { reason: "probeFailed", message: "No character limit." },
+            },
+          },
+        ],
+        "ElevenLabs",
+      ),
+      source(
+        [
+          {
+            id: "worker.json",
+            driver: ProviderDriverKind.make("codex"),
+            usageLimits: { checkedAt, windows: [], unavailable: { reason: "probeFailed" } },
+          },
+          { id: "fine", usageLimits: { checkedAt, windows: [balance] } },
+        ],
+        "Hub",
+      ),
+    ]);
+    expect(collectLimitNotices(input)).toEqual([
+      "ElevenLabs: No character limit.",
+      "Hub · worker: Could not read limits.",
+    ]);
+    expect(collectLimitAccounts(input).map((account) => account.key)).toEqual(["hub:fine"]);
   });
 });
 

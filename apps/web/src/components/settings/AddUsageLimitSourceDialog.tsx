@@ -1,8 +1,6 @@
 import {
   ELEVENLABS_DEFAULT_BASE_URL,
   type EnvironmentId,
-  type UsageLimitSourceConfig,
-  UsageLimitSourceId,
   type UsageLimitSourceKind,
 } from "@t3tools/contracts";
 import { useState } from "react";
@@ -22,40 +20,24 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SecretInput } from "./SecretInput";
 import { Label } from "../ui/label";
+import {
+  EMPTY_USAGE_SOURCE_DRAFT,
+  USAGE_SOURCE_KIND_NAMES,
+  isUsageSourceKind,
+  usageSourceConfig,
+  usageSourceId,
+  type UsageSourceDraft,
+} from "./AddUsageLimitSourceDialog.logic";
 
-const SOURCE_KINDS = {
-  cliproxy: "CLIProxyAPI hub",
-  elevenlabs: "ElevenLabs",
-  canva: "Canva",
-} as const satisfies Record<UsageLimitSourceKind, string>;
-
-const isSourceKind = (value: unknown): value is UsageLimitSourceKind =>
-  typeof value === "string" && value in SOURCE_KINDS;
-
-/**
- * Dots and dashes are kept so `foo-bar.com` and `foo.bar.com` do not collide;
- * anything else (a port's colon, a path) is folded to a dash.
- */
-function slug(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9.-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function sourceIdFromUrl(url: string): UsageLimitSourceId {
-  let host = url;
-  try {
-    host = new URL(url).host;
-  } catch {}
-  return UsageLimitSourceId.make(`cliproxy-${slug(host) || "hub"}`);
-}
-
-/** A label tells two accounts of the same service apart; without one, re-adding replaces. */
-function sourceIdFromLabel(kind: UsageLimitSourceKind, label: string): UsageLimitSourceId {
-  const suffix = slug(label);
-  return UsageLimitSourceId.make(suffix ? `${kind}-${suffix}` : kind);
-}
+const KIND_NOTES: Partial<Record<UsageLimitSourceKind, string>> = {
+  canva: "Canva has no API for AI credits. The usage page links to Canva billing instead.",
+  fal: "Reading the balance needs a key with the BILLING or FULL preset; a plain API key is refused.",
+  deepseek: "DeepSeek reports no spend, so spend is counted from balance changes from now on.",
+  openrouter:
+    "The API key shows its own spend. Add a management key to also see the account balance.",
+  typesafe:
+    "TypeSafe has no balance API. Jev spend is counted once winnow is connected; until then the usage page links to the console.",
+};
 
 /**
  * Keys are sent once and kept in that server's secret store; settings only ever carry a
@@ -66,54 +48,31 @@ export function AddUsageLimitSourceDialog({
   onOpenChange,
   environmentId,
   environmentLabel,
+  existingIds,
 }: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
+  readonly existingIds: ReadonlySet<string>;
 }) {
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
-  const [kind, setKind] = useState<UsageLimitSourceKind>("cliproxy");
-  const [label, setLabel] = useState("");
-  const [url, setUrl] = useState("");
-  const [key, setKey] = useState("");
-  const trimmedLabel = label.trim();
-  const trimmedUrl = url.trim();
-  const trimmedKey = key.trim();
-  const canSave =
-    kind === "canva" ||
-    (kind === "elevenlabs" && trimmedKey.length > 0) ||
-    (kind === "cliproxy" && trimmedUrl.length > 0 && trimmedKey.length > 0);
+  const [draft, setDraft] = useState<UsageSourceDraft>(EMPTY_USAGE_SOURCE_DRAFT);
+  const { kind } = draft;
+  const edit =
+    (field: Exclude<keyof UsageSourceDraft, "kind">) =>
+    (event: { readonly target: { readonly value: string } }) =>
+      setDraft((current) => ({ ...current, [field]: event.target.value }));
+  const config = usageSourceConfig(draft);
+  const hasUrl = kind === "cliproxy" || kind === "elevenlabs";
+  const hasKey = kind !== "canva" && kind !== "typesafe";
+  const note = KIND_NOTES[kind];
 
-  const reset = () => {
-    setKind("cliproxy");
-    setLabel("");
-    setUrl("");
-    setKey("");
-  };
+  const reset = () => setDraft(EMPTY_USAGE_SOURCE_DRAFT);
 
   const save = () => {
-    if (!canSave) return;
-    const labelField = trimmedLabel ? { label: trimmedLabel } : {};
-    const [id, config]: readonly [UsageLimitSourceId, UsageLimitSourceConfig] =
-      kind === "cliproxy"
-        ? [
-            sourceIdFromUrl(trimmedUrl),
-            { kind, ...labelField, url: trimmedUrl, managementKey: trimmedKey, enabled: true },
-          ]
-        : kind === "elevenlabs"
-          ? [
-              sourceIdFromLabel(kind, trimmedLabel),
-              {
-                kind,
-                ...labelField,
-                apiKey: trimmedKey,
-                baseUrl: trimmedUrl || ELEVENLABS_DEFAULT_BASE_URL,
-                enabled: true,
-              },
-            ]
-          : [sourceIdFromLabel(kind, trimmedLabel), { kind, ...labelField, enabled: true }];
-    updateSettings({ usageLimitSources: { [id]: config } });
+    if (!config) return;
+    updateSettings({ usageLimitSources: { [usageSourceId(draft, existingIds)]: config } });
     reset();
     onOpenChange(false);
   };
@@ -147,14 +106,18 @@ export function AddUsageLimitSourceDialog({
               <Select
                 value={kind}
                 onValueChange={(value) => {
-                  if (isSourceKind(value)) setKind(value);
+                  if (isUsageSourceKind(value)) {
+                    setDraft((current) => ({ ...current, kind: value }));
+                  }
                 }}
               >
                 <SelectTrigger id="usage-source-kind" aria-label="Usage source">
-                  <SelectValue>{(value: UsageLimitSourceKind) => SOURCE_KINDS[value]}</SelectValue>
+                  <SelectValue>
+                    {(value: UsageLimitSourceKind) => USAGE_SOURCE_KIND_NAMES[value]}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectPopup alignItemWithTrigger={false}>
-                  {Object.entries(SOURCE_KINDS).map(([value, name]) => (
+                  {Object.entries(USAGE_SOURCE_KIND_NAMES).map(([value, name]) => (
                     <SelectItem key={value} value={value}>
                       {name}
                     </SelectItem>
@@ -162,48 +125,78 @@ export function AddUsageLimitSourceDialog({
                 </SelectPopup>
               </Select>
             </div>
-            {kind === "canva" ? (
-              <p className="text-xs text-muted-foreground">
-                Canva has no API for AI credits. The usage page links to Canva billing instead.
-              </p>
-            ) : (
+            {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
+            {hasUrl ? (
+              <div className="grid gap-1.5">
+                <Label htmlFor="usage-source-url">
+                  {kind === "cliproxy" ? "Hub URL" : "API URL (optional)"}
+                </Label>
+                <Input
+                  id="usage-source-url"
+                  placeholder={
+                    kind === "cliproxy"
+                      ? "https://hub.example.ts.net:8318"
+                      : ELEVENLABS_DEFAULT_BASE_URL
+                  }
+                  value={draft.url}
+                  onChange={edit("url")}
+                />
+              </div>
+            ) : null}
+            {hasKey ? (
+              <div className="grid gap-1.5">
+                <Label htmlFor="usage-source-key">
+                  {kind === "cliproxy" ? "Management key" : "API key"}
+                </Label>
+                <SecretInput id="usage-source-key" value={draft.key} onChange={edit("key")} />
+              </div>
+            ) : null}
+            {kind === "openrouter" ? (
+              <div className="grid gap-1.5">
+                <Label htmlFor="usage-source-management-key">Management key (optional)</Label>
+                <SecretInput
+                  id="usage-source-management-key"
+                  value={draft.managementKey}
+                  onChange={edit("managementKey")}
+                />
+              </div>
+            ) : null}
+            {kind === "typesafe" ? (
               <>
                 <div className="grid gap-1.5">
-                  <Label htmlFor="usage-source-url">
-                    {kind === "cliproxy" ? "Hub URL" : "API URL (optional)"}
+                  <Label htmlFor="usage-source-start-credit">
+                    Starting credit in USD (optional)
                   </Label>
                   <Input
-                    id="usage-source-url"
-                    placeholder={
-                      kind === "cliproxy"
-                        ? "https://hub.example.ts.net:8318"
-                        : ELEVENLABS_DEFAULT_BASE_URL
-                    }
-                    value={url}
-                    onChange={(event) => setUrl(event.target.value)}
+                    id="usage-source-start-credit"
+                    inputMode="decimal"
+                    placeholder="50"
+                    value={draft.startCredit}
+                    onChange={edit("startCredit")}
                   />
                 </div>
                 <div className="grid gap-1.5">
-                  <Label htmlFor="usage-source-key">
-                    {kind === "cliproxy" ? "Management key" : "API key"}
-                  </Label>
-                  <SecretInput
-                    id="usage-source-key"
-                    value={key}
-                    onChange={(event) => setKey(event.target.value)}
+                  <Label htmlFor="usage-source-start-date">Bought on (optional)</Label>
+                  <Input
+                    id="usage-source-start-date"
+                    type="date"
+                    value={draft.startDate}
+                    onChange={edit("startDate")}
                   />
                 </div>
               </>
-            )}
+            ) : null}
             <div className="grid gap-1.5">
               <Label htmlFor="usage-source-label">Label (optional)</Label>
               <Input
                 id="usage-source-label"
                 placeholder={
-                  kind === "cliproxy" ? "Defaults to the hub's host name" : SOURCE_KINDS[kind]
+                  kind === "cliproxy"
+                    ? "Defaults to the hub's host name"
+                    : USAGE_SOURCE_KIND_NAMES[kind]
                 }
-                value={label}
-                onChange={(event) => setLabel(event.target.value)}
+                value={draft.label}
+                onChange={edit("label")}
               />
             </div>
           </form>
@@ -218,7 +211,7 @@ export function AddUsageLimitSourceDialog({
           >
             Cancel
           </Button>
-          <Button onClick={save} disabled={!canSave}>
+          <Button onClick={save} disabled={!config}>
             Add source
           </Button>
         </DialogFooter>

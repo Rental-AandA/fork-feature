@@ -4,6 +4,7 @@ import {
   collectExternalUsageLinks,
   collectLimitNotices,
   collectLimitPools,
+  collectMoneyAccounts,
   cursorUsageWindowDetails,
   displayLimitWindows,
   formatResetsIn,
@@ -589,7 +590,9 @@ export function UsageLimitsPooled({
   readonly cursorPrompt?: ReactNode;
 }) {
   const [segmentPopover] = useState(() => PopoverCreateHandle<SegmentPayload>());
-  const pools = collectLimitPools(collectLimitAccounts(presentations), now);
+  const accounts = collectLimitAccounts(presentations);
+  const pools = collectLimitPools(accounts, now);
+  const money = collectMoneyAccounts(accounts);
   const notices = collectLimitNotices(presentations);
   const externalLinks = collectExternalUsageLinks(presentations);
   const cursorPromptAt =
@@ -599,7 +602,11 @@ export function UsageLimitsPooled({
     ) + 1;
   return (
     <div className="flex flex-col gap-8">
-      {pools.length === 0 && notices.length === 0 && !cursorPrompt && externalLinks.length === 0 ? (
+      {pools.length === 0 &&
+      money.length === 0 &&
+      notices.length === 0 &&
+      !cursorPrompt &&
+      externalLinks.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No provider on the selected environments reports subscription limits.
         </p>
@@ -625,6 +632,29 @@ export function UsageLimitsPooled({
         }
       </Popover>
       {cursorPromptAt === pools.length ? cursorPrompt : null}
+      {money.length > 0 ? (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-medium text-foreground">Tools & money</h2>
+          <div className="flex flex-col divide-y divide-border/60 rounded-lg border border-border/60">
+            {money.map(({ account, summary }) => (
+              <div
+                key={account.key}
+                className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-4 py-3"
+              >
+                <span className="flex min-w-0 items-baseline gap-2 text-sm">
+                  <AccountName account={account} className="font-medium text-foreground" />
+                  {account.sourceLabel ? (
+                    <span className="truncate text-xs text-muted-foreground">
+                      {account.sourceLabel}
+                    </span>
+                  ) : null}
+                </span>
+                <span className="text-sm text-muted-foreground tabular-nums">{summary}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
       {externalLinks.map((link) => (
         <section
           key={link.url}

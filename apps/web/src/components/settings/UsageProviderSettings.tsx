@@ -1,4 +1,4 @@
-import type { EnvironmentId, UnifiedSettings, UsageLimitSourceKind } from "@t3tools/contracts";
+import type { EnvironmentId, UnifiedSettings } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { PlusIcon } from "lucide-react";
 import { useState } from "react";
@@ -18,14 +18,9 @@ import {
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { AddUsageLimitSourceDialog } from "./AddUsageLimitSourceDialog";
+import { USAGE_SOURCE_KIND_NAMES } from "./AddUsageLimitSourceDialog.logic";
 import { searchableSetting } from "./settingsSearch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
-
-const SOURCE_KIND_LABELS = {
-  cliproxy: "CLI Proxy",
-  elevenlabs: "ElevenLabs",
-  canva: "Canva",
-} as const satisfies Record<UsageLimitSourceKind, string>;
 
 export function UsageProviderSettings({
   environmentId,
@@ -103,14 +98,14 @@ export function UsageProviderSettings({
                 : source.kind === "elevenlabs"
                   ? source.baseUrl
                   : null;
-            const label = source.label?.trim() || location || SOURCE_KIND_LABELS[source.kind];
+            const label = source.label?.trim() || location || USAGE_SOURCE_KIND_NAMES[source.kind];
             return (
               <SettingsRow
                 key={id}
                 title={label}
                 description={
                   <span className="break-all">
-                    {SOURCE_KIND_LABELS[source.kind]}
+                    {USAGE_SOURCE_KIND_NAMES[source.kind]}
                     {source.enabled ? "" : " · Disabled"}
                     {location && label !== location ? ` · ${location}` : ""}
                   </span>
@@ -134,6 +129,7 @@ export function UsageProviderSettings({
           onOpenChange={setAdding}
           environmentId={environmentId}
           environmentLabel={environmentLabel}
+          existingIds={new Set(Object.keys(sources))}
         />
       ) : null}
     </>

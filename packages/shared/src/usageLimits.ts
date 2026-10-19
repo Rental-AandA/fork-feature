@@ -8,6 +8,7 @@ import {
   type ServerProvider,
   type ServerProviderUsageLimits,
   type ServerProviderUsageWindow,
+  type UsageLimitSourceAccount,
   type UsageLimitSourceSnapshots,
 } from "@t3tools/contracts";
 
@@ -270,7 +271,9 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
         ? `${presentation.entry.target.label} · ${source.label}`
         : source.label;
       for (const account of source.accounts) {
-        if (limitsNotice(account.usageLimits) !== null) continue;
+        if (limitsNotice(account.usageLimits) !== null && !reportsSpendOnly(account.usageLimits)) {
+          continue;
+        }
         const key = `${source.id}:${account.id}${account.workspaceId ? `:${account.workspaceId}` : ""}`;
         merge(resolveKey(account) ?? key, {
           key,
@@ -299,6 +302,15 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
   return [...accounts.values()];
 }
 
+// Spend without any windows (an OpenRouter key without a limit) is still worth showing.
+function reportsSpendOnly(limits: ServerProviderUsageLimits): boolean {
+  return limits.spend !== undefined && limits.unavailable === undefined;
+}
+
+function sourceAccountName(account: UsageLimitSourceAccount): string {
+  return account.email ?? account.id.replace(/\.json$/i, "");
+}
+
 export function collectLimitNotices(presentations: LimitPresentations): readonly string[] {
   const label = (environmentLabel: string, subject: string) =>
     presentations.size > 1 ? `${environmentLabel} · ${subject}` : subject;
@@ -316,6 +328,18 @@ export function collectLimitNotices(presentations: LimitPresentations): readonly
         notices.push(`${label(environmentLabel, source.label)}: ${source.error}`);
       } else if (source.accounts.length === 0) {
         notices.push(`${label(environmentLabel, source.label)}: No accounts reported.`);
+      }
+      // An unreadable account leaves the pools, so it stays visible here. An
+      // unsupported one with a usage page already shows as that page's link.
+      for (const account of source.accounts) {
+        const limits = account.usageLimits;
+        if (limits.unavailable?.reason === "unsupported" && limits.externalUsage) continue;
+        if (reportsSpendOnly(limits)) continue;
+        const notice = limitsNotice(limits);
+        if (notice === null) continue;
+        const name = sourceAccountName(account);
+        const subject = name === source.label ? source.label : `${source.label} · ${name}`;
+        notices.push(`${label(environmentLabel, subject)}: ${notice}`);
       }
     }
   }
@@ -384,7 +408,14 @@ export function collectLimitPools(
   now: number,
 ): readonly LimitPool[] {
   const byDriver = new Map<ServerProvider["driver"], LimitAccount[]>();
-  for (const account of accounts) {
+  for (const reported of accounts) {
+    // Money has no shared scale with quota percentages; collectMoneyAccounts shows it.
+    const windows = reported.limits.windows.filter((window) => !isMoneyWindow(window));
+    if (windows.length === 0) continue;
+    const account =
+      windows.length === reported.limits.windows.length
+        ? reported
+        : { ...reported, limits: { ...reported.limits, windows } };
     const list = byDriver.get(account.driver);
     if (list) list.push(account);
     else byDriver.set(account.driver, [account]);
@@ -560,7 +591,54 @@ export function remainingAmountLabel(
     limit += window.limit;
   }
   const format = (value: number) => Math.round(value).toLocaleString();
-  return `${format(remaining)} von ${format(limit)} ${unit} übrig`;
+  return `${format(remaining)} of ${format(limit)} ${unit} left`;
+}
+
+/** Money windows carry an ISO currency code as their unit, so a balance without a limit is still an amount. */
+export function isMoneyWindow(window: ServerProviderUsageWindow): boolean {
+  return window.unit !== undefined && /^[A-Z]{3}$/.test(window.unit);
+}
+
+export function formatMoney(amount: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
+  } catch {
+    return `${amount.toFixed(2)} ${currency}`;
+  }
+}
+
+/** Balance and spend in one line, such as "$12.40 left · today $0.80 · month $7.10". */
+export function moneySummary(limits: ServerProviderUsageLimits): string | null {
+  const parts = limits.windows.flatMap((window) => {
+    if (!isMoneyWindow(window) || window.remaining === undefined) return [];
+    const left = formatMoney(window.remaining, window.unit!);
+    return [
+      window.limit === undefined
+        ? `${left} left`
+        : `${left} of ${formatMoney(window.limit, window.unit!)} left`,
+    ];
+  });
+  const spend = limits.spend;
+  if (spend) {
+    for (const [period, amount] of [
+      ["today", spend.day],
+      ["week", spend.week],
+      ["month", spend.month],
+    ] as const) {
+      if (amount !== undefined) parts.push(`${period} ${formatMoney(amount, spend.currency)}`);
+    }
+  }
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+/** Accounts with a balance or spend, shown as amounts rather than percentage bars. */
+export function collectMoneyAccounts(
+  accounts: readonly LimitAccount[],
+): ReadonlyArray<{ readonly account: LimitAccount; readonly summary: string }> {
+  return accounts.flatMap((account) => {
+    const summary = moneySummary(account.limits);
+    return summary === null ? [] : [{ account, summary }];
+  });
 }
 
 export function remainingPercent(window: ServerProviderUsageWindow): number {

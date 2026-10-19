@@ -3,7 +3,10 @@ import {
   ClaudeSettings,
   CodexSettings,
   CliproxyUsageLimitSourceConfig,
+  DeepSeekUsageLimitSourceConfig,
   ElevenLabsUsageLimitSourceConfig,
+  FalUsageLimitSourceConfig,
+  OpenRouterUsageLimitSourceConfig,
   type ServerSettings,
   secretSettingsFields,
 } from "@t3tools/contracts";
@@ -34,6 +37,9 @@ const providerSecretFields = new Map([
 const usageLimitSecretFields = new Map<string, ReadonlyArray<string>>([
   ["cliproxy", secretSettingsFields(CliproxyUsageLimitSourceConfig)],
   ["elevenlabs", secretSettingsFields(ElevenLabsUsageLimitSourceConfig)],
+  ["fal", secretSettingsFields(FalUsageLimitSourceConfig)],
+  ["deepseek", secretSettingsFields(DeepSeekUsageLimitSourceConfig)],
+  ["openrouter", secretSettingsFields(OpenRouterUsageLimitSourceConfig)],
 ]);
 const encode = (value: string) => Buffer.from(value, "utf8").toString("base64url");
 

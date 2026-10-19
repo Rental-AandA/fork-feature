@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
-import { ServerProviderUsageWindow, UsageLimitSourceSnapshots } from "./providerUsageLimits.ts";
+import {
+  ServerProviderUsageLimits,
+  ServerProviderUsageWindow,
+  UsageLimitSourceSnapshots,
+} from "./providerUsageLimits.ts";
 
 const decodeWindow = Schema.decodeUnknownSync(ServerProviderUsageWindow);
 const decodeSnapshots = Schema.decodeUnknownSync(UsageLimitSourceSnapshots);
+const decodeLimits = Schema.decodeUnknownSync(ServerProviderUsageLimits);
 
 const window = { id: "characters", kind: "monthly", label: "Characters", usedPercent: 25 };
 
@@ -40,9 +45,24 @@ describe("UsageLimitSourceSnapshots kinds", () => {
   });
 
   it("keeps known source kinds and drops kinds a newer server added", () => {
-    const decoded = decodeSnapshots(
-      ["cliproxy", "elevenlabs", "canva", "future"].map((kind) => snapshot(kind)),
-    );
-    expect(decoded.map((source) => source.kind)).toEqual(["cliproxy", "elevenlabs", "canva"]);
+    const kinds = ["cliproxy", "elevenlabs", "canva", "fal", "deepseek", "openrouter", "typesafe"];
+    const decoded = decodeSnapshots([...kinds, "future"].map((kind) => snapshot(kind)));
+    expect(decoded.map((source) => source.kind)).toEqual(kinds);
+  });
+});
+
+describe("ServerProviderUsageLimits spend", () => {
+  const limits = { checkedAt: "2026-10-20T00:00:00.000Z", windows: [] };
+
+  it("decodes partial spend and keeps reports without it valid", () => {
+    expect(decodeLimits(limits)).toEqual(limits);
+    expect(decodeLimits({ ...limits, spend: { currency: "USD", day: 0.8 } }).spend).toEqual({
+      currency: "USD",
+      day: 0.8,
+    });
+  });
+
+  it.each([{ day: -1 }, { month: "7.10" }, { currency: "" }])("rejects spend %o", (invalid) => {
+    expect(() => decodeLimits({ ...limits, spend: { currency: "USD", ...invalid } })).toThrow();
   });
 });

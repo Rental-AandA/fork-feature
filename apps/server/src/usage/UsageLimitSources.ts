@@ -19,15 +19,21 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
+import { ServerConfig } from "../config.ts";
 import * as Settings from "../serverSettings.ts";
 import { makeCliproxyApi } from "./cliproxyApi.ts";
+import { makeDeepSeekApi } from "./deepseekApi.ts";
 import { makeElevenLabsApi } from "./elevenlabsApi.ts";
+import { makeFalApi } from "./falApi.ts";
+import { makeOpenRouterApi } from "./openrouterApi.ts";
+import { makeSpendHistory } from "./spendHistory.ts";
 
 export class UsageLimitSources extends Context.Service<
   UsageLimitSources,
@@ -42,9 +48,20 @@ export class UsageLimitSources extends Context.Service<
 >()("t3/usage/UsageLimitSources") {}
 
 const CANVA_BILLING_URL = "https://www.canva.com/settings/billing-and-plans";
+const TYPESAFE_CONSOLE_URL = "https://console.typesafe.ai";
+
+const KIND_LABELS = {
+  elevenlabs: "ElevenLabs",
+  canva: "Canva",
+  fal: "fal",
+  deepseek: "DeepSeek",
+  openrouter: "OpenRouter",
+  typesafe: "Jev",
+} as const satisfies Record<Exclude<UsageLimitSourceKind, "cliproxy">, string>;
 
 type SourceReader<K extends UsageLimitSourceKind> = (
   config: Extract<UsageLimitSourceConfig, { readonly kind: K }>,
+  id: UsageLimitSourceId,
 ) => Effect.Effect<ReadonlyArray<UsageLimitSourceAccount>, UsageLimitSourceError>;
 
 const missingKey = (detail: string) => Effect.fail(new UsageLimitSourceError({ detail }));
@@ -60,18 +77,43 @@ const readCanva: SourceReader<"canva"> = (config) =>
           ...makeUnavailableUsageLimits({
             checkedAt: DateTime.formatIso(now),
             reason: "unsupported",
-            message: "Canva zeigt KI-Credits nur in der Abrechnung",
+            message: "Canva shows AI credits only on its billing page.",
           }),
-          externalUsage: { label: "Canva-Abrechnung", url: CANVA_BILLING_URL },
+          externalUsage: { label: "Canva billing", url: CANVA_BILLING_URL },
         },
       },
     ]),
   );
 
+// TypeSafe documents no balance or usage API. Spend will be counted from the
+// tokens winnow reports once it is connected; until then the console is the only view.
+const readTypesafe: SourceReader<"typesafe"> = (config) =>
+  DateTime.now.pipe(
+    Effect.map((now) => {
+      const credit =
+        config.startCredit === undefined
+          ? ""
+          : ` Starting credit: $${config.startCredit.toFixed(2)}${config.startDate ? ` since ${config.startDate}` : ""}.`;
+      return [
+        {
+          id: config.label ?? "Jev",
+          driver: ProviderDriverKind.make("typesafe"),
+          usageLimits: {
+            ...makeUnavailableUsageLimits({
+              checkedAt: DateTime.formatIso(now),
+              reason: "unsupported",
+              message: `Jev usage is counted once winnow is connected.${credit}`,
+            }),
+            externalUsage: { label: "TypeSafe console", url: TYPESAFE_CONSOLE_URL },
+          },
+        },
+      ];
+    }),
+  );
+
 function sourceLabel(id: string, config: UsageLimitSourceConfig): string {
   if (config.label) return config.label;
-  if (config.kind === "elevenlabs") return "ElevenLabs";
-  if (config.kind === "canva") return "Canva";
+  if (config.kind !== "cliproxy") return KIND_LABELS[config.kind];
   const fallback = id.trim() || "Usage limit source";
   try {
     return new URL(config.url).host || fallback;
@@ -84,6 +126,12 @@ function sourceLabel(id: string, config: UsageLimitSourceConfig): string {
 export const make = Effect.gen(function* () {
   const api = yield* makeCliproxyApi;
   const elevenlabs = yield* makeElevenLabsApi;
+  const fal = yield* makeFalApi;
+  const deepseek = yield* makeDeepSeekApi;
+  const openrouter = yield* makeOpenRouterApi;
+  const spendHistory = yield* makeSpendHistory(
+    (yield* Path.Path).join((yield* ServerConfig).stateDir, "usage-spend.json"),
+  );
   const settingsService = yield* Settings.ServerSettingsService;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
   const stateRef = yield* Ref.make<ReadonlyArray<UsageLimitSourceSnapshot>>([]);
@@ -102,10 +150,24 @@ export const make = Effect.gen(function* () {
         ? missingKey("No API key configured.")
         : elevenlabs.readAccounts(config),
     canva: readCanva,
+    fal: (config) =>
+      config.apiKey.length === 0 ? missingKey("No API key configured.") : fal.readAccounts(config),
+    deepseek: (config, id) =>
+      config.apiKey.length === 0
+        ? missingKey("No API key configured.")
+        : deepseek.readAccounts(config, (currency, balance) =>
+            spendHistory.record(`${id}:${currency}`, balance),
+          ),
+    openrouter: (config) =>
+      config.apiKey.length === 0
+        ? missingKey("No API key configured.")
+        : openrouter.readAccounts(config),
+    typesafe: readTypesafe,
   };
   const readAccounts = <K extends UsageLimitSourceKind>(
     config: Extract<UsageLimitSourceConfig, { readonly kind: K }>,
-  ) => (readers[config.kind] as SourceReader<K>)(config);
+    id: UsageLimitSourceId,
+  ) => (readers[config.kind] as SourceReader<K>)(config, id);
 
   const readSource = Effect.fn("UsageLimitSources.readSource")(function* (
     id: UsageLimitSourceId,
@@ -113,7 +175,7 @@ export const make = Effect.gen(function* () {
   ) {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     const base = { id, kind: config.kind, label: sourceLabel(id, config), checkedAt } as const;
-    const accounts = yield* readAccounts(config).pipe(Effect.result);
+    const accounts = yield* readAccounts(config, id).pipe(Effect.result);
     if (accounts._tag === "Failure") {
       yield* Effect.logDebug("usage limit source read failed", { id, cause: accounts.failure });
       return { ...base, accounts: [], error: accounts.failure.detail };

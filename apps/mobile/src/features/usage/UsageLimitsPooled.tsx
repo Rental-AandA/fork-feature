@@ -6,6 +6,7 @@ import {
   collectExternalUsageLinks,
   collectLimitNotices,
   collectLimitPools,
+  collectMoneyAccounts,
   cursorUsageWindowDetails,
   displayLimitWindows,
   formatResetsIn,
@@ -266,7 +267,9 @@ export function UsageLimitsSection({
     selectedEnvironmentIds === null
       ? presentations
       : new Map([...presentations].filter(([id]) => selectedEnvironmentIds.has(id)));
-  const pools = collectLimitPools(collectLimitAccounts(selected), now);
+  const accounts = collectLimitAccounts(selected);
+  const pools = collectLimitPools(accounts, now);
+  const money = collectMoneyAccounts(accounts);
   const notices = collectLimitNotices(selected);
   const externalLinks = collectExternalUsageLinks(selected);
   const colors = useProviderColors();
@@ -278,6 +281,7 @@ export function UsageLimitsSection({
   return (
     <View className="gap-6">
       {pools.length === 0 &&
+      money.length === 0 &&
       notices.length === 0 &&
       failedLabels.length === 0 &&
       !cursorPrompt &&
@@ -322,6 +326,27 @@ export function UsageLimitsSection({
         );
       })}
       {cursorPromptAt === pools.length ? cursorPrompt : null}
+      {money.length > 0 ? (
+        <View className="gap-3">
+          <Text className="px-1 text-base font-t3-medium text-foreground">Tools & money</Text>
+          <View className="rounded-xl border border-border-subtle">
+            {money.map(({ account, summary }, index) => (
+              <View
+                key={account.key}
+                className={`gap-1 px-4 py-3 ${index > 0 ? "border-t border-border-subtle" : ""}`}
+              >
+                <Text className="text-sm font-t3-medium text-foreground">
+                  {accountName(account)}
+                  {account.sourceLabel ? (
+                    <Text className="text-xs text-foreground-muted"> · {account.sourceLabel}</Text>
+                  ) : null}
+                </Text>
+                <Text className="text-sm tabular-nums text-foreground-muted">{summary}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      ) : null}
       {externalLinks.map((link) => (
         <View key={link.url} className="gap-3 rounded-xl border border-border-subtle p-4">
           <Text className="text-base font-t3-medium text-foreground">{link.label}</Text>

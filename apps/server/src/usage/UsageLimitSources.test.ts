@@ -1,4 +1,5 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
   ServerConfigStreamEvent,
@@ -11,10 +12,14 @@ import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
+import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as UsageLimitSources from "./UsageLimitSources.ts";
 
 const encodeConfigEvent = Schema.encodeSync(ServerConfigStreamEvent);
+const stateLayer = ServerConfig.layerTest(process.cwd(), { prefix: "t3-usage-sources-" }).pipe(
+  Layer.provideMerge(NodeServices.layer),
+);
 
 it.effect("keeps malformed source URLs encodable for config subscribers", () =>
   Effect.gen(function* () {
@@ -83,6 +88,7 @@ it.effect("keeps malformed source URLs encodable for config subscribers", () =>
         HttpClient.make(() => Effect.die("Unexpected network request")),
       ),
       NodeCrypto.layer,
+      stateLayer,
     ]),
     Effect.scoped,
   ),
@@ -124,6 +130,24 @@ it("defaults the ElevenLabs API URL and rejects a source kind this build does no
   ).toThrow();
 });
 
+it("decodes money sources with their key defaults", () => {
+  const settings = decodeServerSettings({
+    usageLimitSources: {
+      fal: { kind: "fal" },
+      router: { kind: "openrouter", apiKey: "key" },
+      jev: { kind: "typesafe", startCredit: 50 },
+    },
+  });
+  expect(settings.usageLimitSources).toEqual({
+    fal: { kind: "fal", apiKey: "", enabled: true },
+    router: { kind: "openrouter", apiKey: "key", managementKey: "", enabled: true },
+    jev: { kind: "typesafe", startCredit: 50, enabled: true },
+  });
+  expect(() =>
+    decodeServerSettings({ usageLimitSources: { jev: { kind: "typesafe", startCredit: -1 } } }),
+  ).toThrow();
+});
+
 it.effect("reads mixed source kinds and keeps each failure on its own source", () =>
   Effect.gen(function* () {
     const sources = yield* UsageLimitSources.make;
@@ -156,10 +180,10 @@ it.effect("reads mixed source kinds and keeps each failure on its own source", (
       windows: [],
       unavailable: {
         reason: "unsupported",
-        message: "Canva zeigt KI-Credits nur in der Abrechnung",
+        message: "Canva shows AI credits only on its billing page.",
       },
       externalUsage: {
-        label: "Canva-Abrechnung",
+        label: "Canva billing",
         url: "https://www.canva.com/settings/billing-and-plans",
       },
     });
@@ -224,7 +248,81 @@ it.effect("reads mixed source kinds and keeps each failure on its own source", (
         ),
       ),
       NodeCrypto.layer,
+      stateLayer,
     ]),
     Effect.scoped,
   ),
 );
+
+it.effect("derives DeepSeek spend across refreshes and explains sources without an API", () => {
+  let balance = "10.00";
+  return Effect.gen(function* () {
+    const sources = yield* UsageLimitSources.make;
+    yield* sources.refresh;
+    balance = "9.50";
+    yield* sources.refresh;
+    const byId = new Map(
+      (yield* sources.current).map((snapshot) => [String(snapshot.id), snapshot]),
+    );
+
+    expect(byId.get("deepseek")?.accounts[0]?.usageLimits).toMatchObject({
+      windows: [{ id: "balance-USD", remaining: 9.5, unit: "USD" }],
+      spend: { currency: "USD", day: 0.5, month: 0.5 },
+    });
+    expect(byId.get("jev")).toMatchObject({ kind: "typesafe", label: "Jev" });
+    expect(byId.get("jev")?.accounts[0]?.usageLimits).toMatchObject({
+      windows: [],
+      unavailable: {
+        reason: "unsupported",
+        message:
+          "Jev usage is counted once winnow is connected. Starting credit: $50.00 since 2026-10-01.",
+      },
+      externalUsage: { url: "https://console.typesafe.ai" },
+    });
+    expect(byId.get("fal")).toMatchObject({
+      kind: "fal",
+      label: "fal",
+      accounts: [],
+      error: "No API key configured.",
+    });
+  }).pipe(
+    Effect.provide([
+      ServerSettings.layerTest({
+        usageLimitSources: {
+          [UsageLimitSourceId.make("deepseek")]: {
+            kind: "deepseek",
+            apiKey: "deepseek-key",
+            enabled: true,
+          },
+          [UsageLimitSourceId.make("jev")]: {
+            kind: "typesafe",
+            startCredit: 50,
+            startDate: "2026-10-01",
+            enabled: true,
+          },
+          [UsageLimitSourceId.make("fal")]: { kind: "fal", apiKey: "", enabled: true },
+        },
+      }),
+      Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+        shouldRunScopeWork: () => Effect.succeed(false),
+      }),
+      Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.sync(() =>
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json({
+                is_available: true,
+                balance_infos: [{ currency: "USD", total_balance: balance }],
+              }),
+            ),
+          ),
+        ),
+      ),
+      NodeCrypto.layer,
+      stateLayer,
+    ]),
+    Effect.scoped,
+  );
+});

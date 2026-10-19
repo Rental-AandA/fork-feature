@@ -136,6 +136,17 @@ environment that will connect to it; keys stay on that environment.
 - **CLIProxyAPI hub**: enter the hub URL and management key to see the accounts it pools.
 - **ElevenLabs**: enter an API key to see this month's characters left and when they reset.
 - **Canva**: Canva has no API for AI credits, so Limits links to Canva billing instead.
+- **fal**: enter a key created with the BILLING (or FULL) preset; a plain API key cannot read the
+  balance.
+- **DeepSeek**: enter an API key. DeepSeek reports no spend, so spend today and this month is counted
+  from balance changes after you add the source.
+- **OpenRouter**: the API key shows that key's spend today, this week and this month. Add a
+  management key to also see the account's remaining credits.
+- **TypeSafe (Jev)**: TypeSafe has no balance API. Optionally enter the credit you bought; Limits
+  links to the TypeSafe console.
+
+Balances and spend appear under **Usage → Limits → Tools & money**. A source that cannot be read is
+listed with its error below the limits.
 
 ### CLIProxyAPI hubs
 

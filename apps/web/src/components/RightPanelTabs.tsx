@@ -32,6 +32,7 @@ import {
   ChevronRight,
   FileDiff,
   Files,
+  GaugeIcon,
   Globe2,
   Plus,
   TerminalSquare,
@@ -567,6 +568,8 @@ function surfaceTitle(
       return `#${surface.number}`;
     case "pull-requests":
       return "Pull requests";
+    case "usage":
+      return "Usage";
     case "device":
       return surface.title ?? surface.target?.name ?? "Device";
     case "preview": {
@@ -657,6 +660,8 @@ function SurfaceIcon({
       );
     case "pull-requests":
       return <PullRequestGlyph.link className="size-3 shrink-0" />;
+    case "usage":
+      return <GaugeIcon className="size-3 shrink-0" />;
     case "device":
       return surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />

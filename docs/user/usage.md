@@ -162,6 +162,30 @@ This connection supplies usage information; configure
 the provider separately to send agent requests through the hub. Remove the hub from the same
 settings section when you no longer need it.
 
+## Quick overview beside a thread
+
+The bottom drawer switches between **Terminal** and **Usage** with the toggle at its top. Each
+thread remembers its choice, and terminals keep running while Usage is shown. You can also open
+it from the command palette with **Show usage in the bottom drawer**, or as a right-panel tab
+with **Open usage panel**.
+
+- **Context** shows how full this thread's context window is.
+- **Frontier** lists Codex, Claude, Antigravity and other agent accounts. Each row shows the
+  window that limits the account, when it is full again (countdown and clock time), and whether
+  it lasts until the reset at the current pace. The color follows the pace, not the raw
+  percentage. **Use now** marks the account in a family whose leftover resets soon, or else the
+  one with the most headroom.
+- **Tools & money** lists usage sources such as fal, Higgsfield, ElevenLabs, OpenRouter, DeepSeek
+  and Jev: balances, credits, spend, and how many days a balance lasts at this month's pace.
+- Estimated numbers are marked, numbers older than ten minutes say how old they are, and
+  sources that report nothing usable are listed instead of hidden.
+
+**Extras** collects plan perks that end on a date. Banked Codex resets appear on their own; add
+others yourself, such as free generations, with **Add extra**. Swipe or use the arrow keys to
+move through them. You get a reminder three days and one day before an extra ends. The gift
+button next to the context meter in the composer counts extras ending within three days and opens
+the drawer at Extras.
+
 ## Subscription usage widget
 
 Add **Subscription usage** from your iOS or Android widget gallery to see remaining Codex and

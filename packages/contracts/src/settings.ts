@@ -12,6 +12,8 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 import {
   ForwardCompatibleNullable,
   ForwardCompatibleOptional,
+  IsoDateTime,
+  NonNegativeInt,
   OmittedWhenNull,
   ProjectId,
   ThreadId,
@@ -876,6 +878,19 @@ export const UsageLimitSourceConfig = Schema.Union([
 export type UsageLimitSourceConfig = typeof UsageLimitSourceConfig.Type;
 export type UsageLimitSourceKind = UsageLimitSourceConfig["kind"];
 
+/**
+ * A plan perk the user tracks by hand, such as free generations or an unlimited model that ends
+ * on a date. Services rarely expose these, so they live in settings rather than in a source.
+ */
+export const UsageExtra = Schema.Struct({
+  service: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  /** What is left, when the perk is counted; unlimited perks leave it out. */
+  remaining: Schema.optional(NonNegativeInt),
+  expiresAt: IsoDateTime,
+});
+export type UsageExtra = typeof UsageExtra.Type;
+
 export const GitHubHost = TrimmedNonEmptyString.pipe(
   Schema.decodeTo(Schema.String, SchemaTransformation.toLowerCase()),
 );
@@ -1331,6 +1346,10 @@ export const ServerSettings = Schema.Struct({
   cursorKeychainUsageEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
+  // Keyed by a client-made id so an edit or removal targets one perk.
+  usageExtras: Schema.Record(TrimmedNonEmptyString, UsageExtra).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
 
   usagePriceOverrides: Schema.Record(TrimmedNonEmptyString, UsageModelPriceOverride).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
@@ -1592,6 +1611,8 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Record(UsageLimitSourceId, Schema.NullOr(UsageLimitSourceConfig)),
   ),
   cursorKeychainUsageEnabled: Schema.optionalKey(Schema.Boolean),
+  // Per entry like `usageLimitSources`: `null` removes one perk.
+  usageExtras: Schema.optionalKey(Schema.Record(TrimmedNonEmptyString, Schema.NullOr(UsageExtra))),
 
   usagePriceOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, Schema.NullOr(UsageModelPriceOverride)),

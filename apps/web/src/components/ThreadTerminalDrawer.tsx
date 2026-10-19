@@ -11,6 +11,7 @@ import {
   type TerminalSessionState,
 } from "@t3tools/client-runtime/state/terminal";
 import {
+  GaugeIcon,
   Plus,
   Square,
   SquareSplitHorizontal,
@@ -42,6 +43,7 @@ import {
 } from "react";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { Button } from "~/components/ui/button";
+import { Toggle, ToggleGroup } from "~/components/ui/toggle-group";
 import { PanelTabCloseButton } from "~/components/ui/panel-tab-close-button";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { readTextFromClipboard, writeTextToClipboard } from "~/hooks/useCopyToClipboard";
@@ -1142,6 +1144,42 @@ interface ThreadTerminalDrawerProps {
   keybindings: ResolvedKeybindingsConfig;
   terminalLabelsById?: ReadonlyMap<string, string>;
   terminalLaunchLocationsById?: ReadonlyMap<string, TerminalLaunchLocation>;
+  /**
+   * Lets the bottom drawer show the usage overview instead of terminals. Terminals stay mounted
+   * and running behind it; panel mode ignores this.
+   */
+  drawerView?: ThreadTerminalDrawerView | undefined;
+}
+
+export interface ThreadTerminalDrawerView {
+  readonly current: "terminal" | "usage";
+  readonly onChange: (view: "terminal" | "usage") => void;
+  /** The overview, rendered only while it is shown. */
+  readonly usage: ReactNode;
+  readonly usageActions?: ReactNode;
+}
+
+function DrawerViewSwitch({ view }: { readonly view: ThreadTerminalDrawerView }) {
+  return (
+    <ToggleGroup
+      aria-label="Drawer view"
+      variant="segmented"
+      value={[view.current]}
+      onValueChange={(next) => {
+        const value = next[0];
+        if (value === "terminal" || value === "usage") view.onChange(value);
+      }}
+    >
+      <Toggle value="terminal" aria-label="Terminal">
+        <TerminalSquare className="size-3.5" aria-hidden />
+        Terminal
+      </Toggle>
+      <Toggle value="usage" aria-label="Usage">
+        <GaugeIcon className="size-3.5" aria-hidden />
+        Usage
+      </Toggle>
+    </ToggleGroup>
+  );
 }
 
 interface TerminalActionButtonProps {
@@ -1408,9 +1446,14 @@ export default function ThreadTerminalDrawer({
   keybindings,
   terminalLabelsById,
   terminalLaunchLocationsById,
+  drawerView,
 }: ThreadTerminalDrawerProps) {
   const canOperateTerminal = useEnvironmentScope(threadRef.environmentId, AuthTerminalOperateScope);
   const isPanel = mode === "panel";
+  const viewSwitch = isPanel ? undefined : drawerView;
+  const showingUsage = viewSwitch?.current === "usage";
+  // Terminals behind the usage view keep their sessions but neither paint nor take focus.
+  const terminalVisible = visible && !showingUsage;
   const [advancedTypography] = useLocalStorage(
     TYPOGRAPHY_ADVANCED_STORAGE_KEY,
     false,
@@ -1714,6 +1757,12 @@ export default function ThreadTerminalDrawer({
   const syncPreferredHeight = useEffectEvent(() => syncHeight(preferredDrawerHeight));
   useEffect(() => () => syncPreferredHeight(), []);
 
+  const usageBody = showingUsage ? (
+    <div className="min-h-0 w-full flex-1 overflow-y-auto overscroll-contain px-3 py-2.5">
+      {viewSwitch.usage}
+    </div>
+  ) : null;
+
   if (normalizedTerminalIds.length === 0) {
     return (
       <aside
@@ -1735,22 +1784,79 @@ export default function ThreadTerminalDrawer({
             onLostPointerCapture={handleResizePointerEnd}
           />
         ) : null}
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 py-6 text-center text-sm text-muted-foreground">
-          <p>No terminal sessions for this thread yet.</p>
-          <Button
-            size="xs"
-            variant="outline"
-            onClick={onNewTerminalAction}
-            disabled={!canOperateTerminal}
-          >
-            {newTerminalActionLabel}
-          </Button>
-        </div>
+        {viewSwitch ? (
+          <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border/70 px-2">
+            <DrawerViewSwitch view={viewSwitch} />
+            {showingUsage ? (
+              <div className="ms-auto flex items-center gap-1">{viewSwitch.usageActions}</div>
+            ) : null}
+          </div>
+        ) : null}
+        {usageBody ?? (
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 py-6 text-center text-sm text-muted-foreground">
+            <p>No terminal sessions for this thread yet.</p>
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={onNewTerminalAction}
+              disabled={!canOperateTerminal}
+            >
+              {newTerminalActionLabel}
+            </Button>
+          </div>
+        )}
       </aside>
     );
   }
 
   const activeTerminalLaunchLocation = resolveTerminalLaunchLocation(resolvedActiveTerminalId);
+  const terminalActions = (
+    <div className="pointer-events-auto inline-flex items-center overflow-hidden rounded-md border border-border/80 bg-background shadow-xs">
+      <TerminalActionButton
+        disabled={!canOperateTerminal}
+        className={`p-1 text-foreground/90 transition-colors ${
+          hasReachedSplitLimit
+            ? "cursor-not-allowed opacity-64 hover:bg-transparent"
+            : "hover:bg-accent"
+        }`}
+        onClick={onSplitTerminalAction}
+        label={splitTerminalActionLabel}
+      >
+        <SquareSplitHorizontal className="size-3.25" />
+      </TerminalActionButton>
+      <div className="h-4 w-px bg-border/80" />
+      <TerminalActionButton
+        disabled={!canOperateTerminal}
+        className={`p-1 text-foreground/90 transition-colors ${
+          hasReachedSplitLimit
+            ? "cursor-not-allowed opacity-64 hover:bg-transparent"
+            : "hover:bg-accent"
+        }`}
+        onClick={onSplitTerminalVerticalAction}
+        label={splitTerminalVerticalActionLabel}
+      >
+        <SquareSplitVertical className="size-3.25" />
+      </TerminalActionButton>
+      <div className="h-4 w-px bg-border/80" />
+      <TerminalActionButton
+        disabled={!canOperateTerminal}
+        className="p-1 text-foreground/90 transition-colors hover:bg-accent"
+        onClick={onNewTerminalAction}
+        label={newTerminalActionLabel}
+      >
+        <Plus className="size-3.25" />
+      </TerminalActionButton>
+      <div className="h-4 w-px bg-border/80" />
+      <TerminalActionButton
+        disabled={!canOperateTerminal}
+        className="p-1 text-foreground/90 transition-colors hover:bg-accent"
+        onClick={() => confirmCloseTerminal(resolvedActiveTerminalId)}
+        label={closeTerminalActionLabel}
+      >
+        <Trash2 className="size-3.25" />
+      </TerminalActionButton>
+    </div>
+  );
 
   return (
     <aside
@@ -1773,57 +1879,21 @@ export default function ThreadTerminalDrawer({
         />
       ) : null}
 
-      {!hasTerminalSidebar && (
-        <div className="pointer-events-none absolute right-2 top-2 z-20">
-          <div className="pointer-events-auto inline-flex items-center overflow-hidden rounded-md border border-border/80 bg-background shadow-xs">
-            <TerminalActionButton
-              disabled={!canOperateTerminal}
-              className={`p-1 text-foreground/90 transition-colors ${
-                hasReachedSplitLimit
-                  ? "cursor-not-allowed opacity-64 hover:bg-transparent"
-                  : "hover:bg-accent"
-              }`}
-              onClick={onSplitTerminalAction}
-              label={splitTerminalActionLabel}
-            >
-              <SquareSplitHorizontal className="size-3.25" />
-            </TerminalActionButton>
-            <div className="h-4 w-px bg-border/80" />
-            <TerminalActionButton
-              disabled={!canOperateTerminal}
-              className={`p-1 text-foreground/90 transition-colors ${
-                hasReachedSplitLimit
-                  ? "cursor-not-allowed opacity-64 hover:bg-transparent"
-                  : "hover:bg-accent"
-              }`}
-              onClick={onSplitTerminalVerticalAction}
-              label={splitTerminalVerticalActionLabel}
-            >
-              <SquareSplitVertical className="size-3.25" />
-            </TerminalActionButton>
-            <div className="h-4 w-px bg-border/80" />
-            <TerminalActionButton
-              disabled={!canOperateTerminal}
-              className="p-1 text-foreground/90 transition-colors hover:bg-accent"
-              onClick={onNewTerminalAction}
-              label={newTerminalActionLabel}
-            >
-              <Plus className="size-3.25" />
-            </TerminalActionButton>
-            <div className="h-4 w-px bg-border/80" />
-            <TerminalActionButton
-              disabled={!canOperateTerminal}
-              className="p-1 text-foreground/90 transition-colors hover:bg-accent"
-              onClick={() => confirmCloseTerminal(resolvedActiveTerminalId)}
-              label={closeTerminalActionLabel}
-            >
-              <Trash2 className="size-3.25" />
-            </TerminalActionButton>
+      {viewSwitch ? (
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border/70 px-2">
+          <DrawerViewSwitch view={viewSwitch} />
+          <div className="ms-auto flex items-center gap-1">
+            {showingUsage ? viewSwitch.usageActions : hasTerminalSidebar ? null : terminalActions}
           </div>
         </div>
-      )}
+      ) : null}
 
-      <div className="min-h-0 w-full flex-1">
+      {!hasTerminalSidebar && !viewSwitch ? (
+        <div className="pointer-events-none absolute right-2 top-2 z-20">{terminalActions}</div>
+      ) : null}
+
+      {usageBody}
+      <div className={cn("min-h-0 w-full flex-1", showingUsage && "hidden")}>
         <div
           className={cn(
             "flex h-full min-h-0 bg-(--terminal-background)",
@@ -1845,7 +1915,7 @@ export default function ThreadTerminalDrawer({
                 threadId={threadId}
                 onAddTerminalContext={onAddTerminalContext}
                 focusRequestId={focusRequestId}
-                visible={visible}
+                visible={terminalVisible}
                 resizeEpoch={resizeEpoch}
                 drawerHeight={drawerHeight}
                 keybindings={keybindings}
@@ -1870,7 +1940,7 @@ export default function ThreadTerminalDrawer({
                   onAddTerminalContext={onAddTerminalContext}
                   focusRequestId={focusRequestId}
                   autoFocus
-                  visible={visible}
+                  visible={terminalVisible}
                   resizeEpoch={resizeEpoch}
                   drawerHeight={drawerHeight}
                   keybindings={keybindings}

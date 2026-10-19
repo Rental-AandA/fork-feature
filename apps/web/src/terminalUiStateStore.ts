@@ -10,8 +10,13 @@ import {
   type ThreadTerminalGroup,
 } from "./types";
 
+/** What the bottom drawer shows: the thread's terminals or the usage overview. */
+export type ThreadDrawerView = "terminal" | "usage";
+
 interface ThreadTerminalUiState {
   terminalOpen: boolean;
+  /** Absent in layouts saved before the usage view existed; read through `drawerViewOf`. */
+  drawerView?: ThreadDrawerView;
   terminalHeight: number;
   terminalIds: string[];
   activeTerminalId: string;
@@ -159,12 +164,24 @@ function terminalGroupsEqual(left: ThreadTerminalGroup[], right: ThreadTerminalG
   return true;
 }
 
+export function drawerViewOf(state: { readonly drawerView?: ThreadDrawerView }): ThreadDrawerView {
+  return state.drawerView === "usage" ? "usage" : "terminal";
+}
+
+/** Starting or revealing a shell is a request to see it, so it brings the terminal view back. */
+function withTerminalView(state: ThreadTerminalUiState): ThreadTerminalUiState {
+  if (state.drawerView === undefined) return state;
+  const { drawerView: _usage, ...rest } = state;
+  return rest;
+}
+
 function threadTerminalUiStateEqual(
   left: ThreadTerminalUiState,
   right: ThreadTerminalUiState,
 ): boolean {
   return (
     left.terminalOpen === right.terminalOpen &&
+    drawerViewOf(left) === drawerViewOf(right) &&
     left.terminalHeight === right.terminalHeight &&
     left.activeTerminalId === right.activeTerminalId &&
     left.activeTerminalGroupId === right.activeTerminalGroupId &&
@@ -210,6 +227,7 @@ function normalizeThreadTerminalUiState(state: ThreadTerminalUiState): ThreadTer
 
   const normalized: ThreadTerminalUiState = {
     terminalOpen: state.terminalOpen,
+    ...(drawerViewOf(state) === "usage" ? { drawerView: "usage" as const } : {}),
     terminalHeight:
       Number.isFinite(state.terminalHeight) && state.terminalHeight > 0
         ? state.terminalHeight
@@ -277,7 +295,7 @@ function upsertTerminalIntoGroups(
     const nextGroupId = assignUniqueGroupId(fallbackGroupId(terminalId), usedGroupIds);
     terminalGroups.push({ id: nextGroupId, terminalIds: [terminalId] });
     return normalizeThreadTerminalUiState({
-      ...normalized,
+      ...withTerminalView(normalized),
       terminalOpen: true,
       terminalIds,
       activeTerminalId: terminalId,
@@ -331,7 +349,7 @@ function upsertTerminalIntoGroups(
   }
 
   return normalizeThreadTerminalUiState({
-    ...normalized,
+    ...withTerminalView(normalized),
     terminalOpen: true,
     terminalIds,
     activeTerminalId: terminalId,
@@ -342,11 +360,28 @@ function upsertTerminalIntoGroups(
 
 function setThreadTerminalOpen(state: ThreadTerminalUiState, open: boolean): ThreadTerminalUiState {
   const normalized = normalizeThreadTerminalUiState(state);
-  if (open && normalized.terminalIds.length === 0) {
+  // The usage view needs no shell, so opening it never starts one.
+  if (open && normalized.terminalIds.length === 0 && drawerViewOf(normalized) === "terminal") {
     return upsertTerminalIntoGroups(normalized, DEFAULT_THREAD_TERMINAL_ID, "new");
   }
   if (normalized.terminalOpen === open) return normalized;
   return { ...normalized, terminalOpen: open };
+}
+
+/**
+ * Switching views leaves terminals running; the terminal view starts a first shell only when the
+ * drawer is open and has none, as opening the drawer would.
+ */
+function setThreadDrawerView(
+  state: ThreadTerminalUiState,
+  view: ThreadDrawerView,
+  open: boolean,
+): ThreadTerminalUiState {
+  const normalized = normalizeThreadTerminalUiState(state);
+  const { drawerView: _previous, ...rest } = normalized;
+  const switched: ThreadTerminalUiState = view === "usage" ? { ...rest, drawerView: view } : rest;
+  const next = setThreadTerminalOpen(switched, open || normalized.terminalOpen);
+  return threadTerminalUiStateEqual(next, normalized) ? normalized : next;
 }
 
 function setThreadTerminalHeight(
@@ -410,7 +445,15 @@ function closeThreadTerminal(
 
   const remainingTerminalIds = normalized.terminalIds.filter((id) => id !== terminalId);
   if (remainingTerminalIds.length === 0) {
-    return createDefaultThreadTerminalUiState();
+    // A shell that exits behind the usage view must not close the drawer the user is reading.
+    return drawerViewOf(normalized) === "usage"
+      ? {
+          ...createDefaultThreadTerminalUiState(),
+          terminalOpen: normalized.terminalOpen,
+          terminalHeight: normalized.terminalHeight,
+          drawerView: "usage",
+        }
+      : createDefaultThreadTerminalUiState();
   }
 
   const closedTerminalIndex = normalized.terminalIds.indexOf(terminalId);
@@ -436,6 +479,7 @@ function closeThreadTerminal(
 
   return normalizeThreadTerminalUiState({
     terminalOpen: normalized.terminalOpen,
+    ...(drawerViewOf(normalized) === "usage" ? { drawerView: "usage" as const } : {}),
     terminalHeight: normalized.terminalHeight,
     terminalIds: remainingTerminalIds,
     activeTerminalId: nextActiveTerminalId,
@@ -557,6 +601,8 @@ interface TerminalUiStateStoreState {
   terminalUiStateByThreadKey: Record<string, ThreadTerminalUiState>;
   suppressedTerminalIdsByThreadKey: Record<string, string[]>;
   setTerminalOpen: (threadRef: ScopedThreadRef, open: boolean) => void;
+  /** Switches the drawer between terminals and usage; `open` also opens a closed drawer. */
+  setDrawerView: (threadRef: ScopedThreadRef, view: ThreadDrawerView, open?: boolean) => void;
   setTerminalHeight: (threadRef: ScopedThreadRef, height: number) => void;
   splitTerminal: (threadRef: ScopedThreadRef, terminalId: string) => void;
   splitTerminalVertical: (threadRef: ScopedThreadRef, terminalId: string) => void;
@@ -630,6 +676,21 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
               : undefined,
           );
         },
+        setDrawerView: (threadRef, view, open = false) => {
+          const terminalState = selectThreadTerminalUiState(
+            get().terminalUiStateByThreadKey,
+            threadRef,
+          );
+          const startsShell =
+            view === "terminal" &&
+            (open || terminalState.terminalOpen) &&
+            terminalState.terminalIds.length === 0;
+          updateTerminal(
+            threadRef,
+            (state) => setThreadDrawerView(state, view, open),
+            startsShell ? { terminalId: DEFAULT_THREAD_TERMINAL_ID, suppressed: false } : undefined,
+          );
+        },
         setTerminalHeight: (threadRef, height) =>
           updateTerminal(threadRef, (state) => setThreadTerminalHeight(state, height)),
         splitTerminal: (threadRef, terminalId) =>
@@ -666,7 +727,7 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
                 nextState = setThreadActiveTerminal(nextState, terminalId);
               }
               if (options?.open) {
-                nextState = setThreadTerminalOpen(nextState, true);
+                nextState = setThreadTerminalOpen(withTerminalView(nextState), true);
               }
               return normalizeThreadTerminalUiState(nextState);
             },

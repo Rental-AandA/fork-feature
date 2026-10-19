@@ -37,6 +37,73 @@ describe("terminalUiStateStore actions", () => {
     });
   });
 
+  describe("drawer view", () => {
+    const current = () =>
+      selectThreadTerminalUiState(
+        useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+        THREAD_REF,
+      );
+
+    it("opens the usage view without starting a shell, and the terminal view starts one", () => {
+      const store = useTerminalUiStateStore.getState();
+      store.setDrawerView(THREAD_REF, "usage", true);
+      expect(current()).toMatchObject({ terminalOpen: true, drawerView: "usage", terminalIds: [] });
+
+      // Closing and reopening keeps the thread's choice.
+      store.setTerminalOpen(THREAD_REF, false);
+      store.setTerminalOpen(THREAD_REF, true);
+      expect(current()).toMatchObject({ terminalOpen: true, drawerView: "usage", terminalIds: [] });
+
+      store.setDrawerView(THREAD_REF, "terminal");
+      expect(current().drawerView).toBeUndefined();
+      expect(current().terminalIds).toEqual([DEFAULT_THREAD_TERMINAL_ID]);
+    });
+
+    it("keeps running terminals and their layout across a switch to usage and back", () => {
+      const store = useTerminalUiStateStore.getState();
+      store.setTerminalOpen(THREAD_REF, true);
+      store.splitTerminal(THREAD_REF, "terminal-2");
+      const before = current();
+
+      store.setDrawerView(THREAD_REF, "usage");
+      expect(current()).toMatchObject({
+        drawerView: "usage",
+        terminalOpen: true,
+        terminalIds: before.terminalIds,
+        terminalGroups: before.terminalGroups,
+        activeTerminalId: "terminal-2",
+      });
+
+      store.setDrawerView(THREAD_REF, "terminal");
+      expect(current()).toEqual(before);
+    });
+
+    it("stays on usage when a background shell exits, and a new shell brings the terminals back", () => {
+      const store = useTerminalUiStateStore.getState();
+      store.setTerminalOpen(THREAD_REF, true);
+      store.setDrawerView(THREAD_REF, "usage");
+      store.closeTerminal(THREAD_REF, DEFAULT_THREAD_TERMINAL_ID);
+      expect(current()).toMatchObject({ terminalOpen: true, drawerView: "usage", terminalIds: [] });
+
+      store.newTerminal(THREAD_REF, "terminal-2");
+      expect(current().drawerView).toBeUndefined();
+      expect(current().terminalIds).toEqual(["terminal-2"]);
+    });
+
+    it("is remembered per thread", () => {
+      const store = useTerminalUiStateStore.getState();
+      store.setDrawerView(THREAD_REF, "usage", true);
+      store.setTerminalOpen(OTHER_THREAD_REF, true);
+      expect(current().drawerView).toBe("usage");
+      expect(
+        selectThreadTerminalUiState(
+          useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+          OTHER_THREAD_REF,
+        ).drawerView,
+      ).toBeUndefined();
+    });
+  });
+
   it("opens and splits terminals into the active group", () => {
     const store = useTerminalUiStateStore.getState();
     store.setTerminalOpen(THREAD_REF, true);

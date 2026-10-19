@@ -65,7 +65,7 @@ function AccountChip({ email }: { readonly email: string }) {
   );
 }
 
-function AccountAvatar({
+export function AccountAvatar({
   account,
   className,
 }: {
@@ -92,7 +92,7 @@ function AccountAvatar({
   return account.email ? <AccountChip email={account.email} /> : null;
 }
 
-function AccountName({
+export function AccountName({
   account,
   className,
 }: {

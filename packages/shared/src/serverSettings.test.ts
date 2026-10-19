@@ -747,6 +747,23 @@ describe("serverSettings helpers", () => {
     expect(current.usagePriceOverrides["example-model"]?.cacheReadCostPerMillionTokens).toBe(0.5);
   });
 
+  it("adds and removes one usage extra without touching the others", () => {
+    const perk = (title: string) => ({
+      service: "Higgsfield",
+      title,
+      expiresAt: "2026-11-02T22:59:59.000Z",
+    });
+    const current = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      usageExtras: { a: perk("AI Influencer free") },
+    });
+    const added = applyServerSettingsPatch(current, {
+      usageExtras: { b: { ...perk("Nano Banana unlimited"), remaining: 3 } },
+    });
+    expect(Object.keys(added.usageExtras)).toEqual(["a", "b"]);
+    const removed = applyServerSettingsPatch(added, { usageExtras: { a: null } });
+    expect(removed.usageExtras).toEqual({ b: { ...perk("Nano Banana unlimited"), remaining: 3 } });
+  });
+
   it("stores background activity profiles as a versioned object and syncs legacy aliases", () => {
     const next = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
       backgroundActivity: {

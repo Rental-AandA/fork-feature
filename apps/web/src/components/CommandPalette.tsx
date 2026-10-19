@@ -59,6 +59,7 @@ import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
   ChartNoAxesColumnIcon,
+  GaugeIcon,
   CheckIcon,
   ChevronRightIcon,
   CornerLeftUpIcon,
@@ -1740,6 +1741,30 @@ function OpenCommandPaletteDialog(props: {
         },
       });
     }
+  }
+
+  if (activeThread !== null) {
+    const usageThreadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+    actionItems.push({
+      kind: "action",
+      value: "action:usage-drawer",
+      searchTerms: ["usage", "limits", "quota", "credits", "extras", "context", "drawer", "money"],
+      title: "Show usage in the bottom drawer",
+      icon: <GaugeIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        useTerminalUiStateStore.getState().setDrawerView(usageThreadRef, "usage", true);
+      },
+    });
+    actionItems.push({
+      kind: "action",
+      value: "action:usage-panel",
+      searchTerms: ["usage", "limits", "quota", "credits", "extras", "panel", "money"],
+      title: "Open usage panel",
+      icon: <GaugeIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        useRightPanelStore.getState().open(usageThreadRef, "usage");
+      },
+    });
   }
 
   if (activeThread !== null) {

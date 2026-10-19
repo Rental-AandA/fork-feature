@@ -95,6 +95,18 @@ export function collectExternalUsageLinks(presentations: LimitPresentations) {
         });
       }
     }
+    for (const source of presentation.serverConfig?.usageLimitSources ?? []) {
+      for (const { usageLimits } of source.accounts) {
+        const external = usageLimits.externalUsage;
+        if (!external) continue;
+        const account = `${source.label} on ${presentation.entry.target.label}`;
+        links.set(external.url, {
+          ...external,
+          message: usageLimits.unavailable?.message,
+          accounts: [...new Set([...(links.get(external.url)?.accounts ?? []), account])],
+        });
+      }
+    }
   }
   return [...links.values()];
 }
@@ -526,6 +538,29 @@ export function limitsNotice(limits: ServerProviderUsageLimits): string | null {
     return limits.unavailable.message ?? "Could not read limits.";
   }
   return limits.windows.length === 0 ? "No limits reported." : null;
+}
+
+/**
+ * Sums the absolute allowance of windows that report one, such as ElevenLabs
+ * characters. Null when any window lacks it or the units differ, since a
+ * partial sum would understate what is left.
+ */
+export function remainingAmountLabel(
+  windows: ReadonlyArray<ServerProviderUsageWindow>,
+): string | null {
+  const unit = windows[0]?.unit;
+  if (unit === undefined) return null;
+  let remaining = 0;
+  let limit = 0;
+  for (const window of windows) {
+    if (window.unit !== unit || window.remaining === undefined || window.limit === undefined) {
+      return null;
+    }
+    remaining += window.remaining;
+    limit += window.limit;
+  }
+  const format = (value: number) => Math.round(value).toLocaleString();
+  return `${format(remaining)} von ${format(limit)} ${unit} übrig`;
 }
 
 export function remainingPercent(window: ServerProviderUsageWindow): number {

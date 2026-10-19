@@ -775,14 +775,43 @@ export const AntigravitySettings = makeProviderSettingsSchema(
 );
 export type AntigravitySettings = typeof AntigravitySettings.Type;
 
-export const UsageLimitSourceConfig = Schema.Struct({
+export const CliproxyUsageLimitSourceConfig = Schema.Struct({
   kind: Schema.Literal("cliproxy"),
   label: Schema.optional(TrimmedNonEmptyString),
   url: TrimmedNonEmptyString,
   managementKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("")), secretSetting),
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
+export type CliproxyUsageLimitSourceConfig = typeof CliproxyUsageLimitSourceConfig.Type;
+
+export const ELEVENLABS_DEFAULT_BASE_URL = "https://api.elevenlabs.io";
+
+export const ElevenLabsUsageLimitSourceConfig = Schema.Struct({
+  kind: Schema.Literal("elevenlabs"),
+  label: Schema.optional(TrimmedNonEmptyString),
+  apiKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("")), secretSetting),
+  baseUrl: TrimmedNonEmptyString.pipe(
+    Schema.withDecodingDefault(Effect.succeed(ELEVENLABS_DEFAULT_BASE_URL)),
+  ),
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type ElevenLabsUsageLimitSourceConfig = typeof ElevenLabsUsageLimitSourceConfig.Type;
+
+// Canva has no API for AI credits, so this source only links to its billing page.
+export const CanvaUsageLimitSourceConfig = Schema.Struct({
+  kind: Schema.Literal("canva"),
+  label: Schema.optional(TrimmedNonEmptyString),
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type CanvaUsageLimitSourceConfig = typeof CanvaUsageLimitSourceConfig.Type;
+
+export const UsageLimitSourceConfig = Schema.Union([
+  CliproxyUsageLimitSourceConfig,
+  ElevenLabsUsageLimitSourceConfig,
+  CanvaUsageLimitSourceConfig,
+]);
 export type UsageLimitSourceConfig = typeof UsageLimitSourceConfig.Type;
+export type UsageLimitSourceKind = UsageLimitSourceConfig["kind"];
 
 export const GitHubHost = TrimmedNonEmptyString.pipe(
   Schema.decodeTo(Schema.String, SchemaTransformation.toLowerCase()),

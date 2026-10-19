@@ -1,4 +1,4 @@
-import type { EnvironmentId, UnifiedSettings } from "@t3tools/contracts";
+import type { EnvironmentId, UnifiedSettings, UsageLimitSourceKind } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { PlusIcon } from "lucide-react";
 import { useState } from "react";
@@ -20,6 +20,12 @@ import { Switch } from "../ui/switch";
 import { AddUsageLimitSourceDialog } from "./AddUsageLimitSourceDialog";
 import { searchableSetting } from "./settingsSearch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
+
+const SOURCE_KIND_LABELS = {
+  cliproxy: "CLI Proxy",
+  elevenlabs: "ElevenLabs",
+  canva: "Canva",
+} as const satisfies Record<UsageLimitSourceKind, string>;
 
 export function UsageProviderSettings({
   environmentId,
@@ -67,7 +73,7 @@ export function UsageProviderSettings({
           !readOnly ? (
             <Button size="xs" variant="outline" onClick={() => setAdding(true)}>
               <PlusIcon className="size-3" aria-hidden />
-              Add hub
+              Add source
             </Button>
           ) : null
         }
@@ -88,18 +94,25 @@ export function UsageProviderSettings({
           />
         ) : null}
         {entries.length === 0 ? (
-          <SettingsRow title="No hubs configured." />
+          <SettingsRow title="No usage sources configured." />
         ) : (
           entries.map(([id, source]) => {
-            const label = source.label?.trim() || source.url;
+            const location =
+              source.kind === "cliproxy"
+                ? source.url
+                : source.kind === "elevenlabs"
+                  ? source.baseUrl
+                  : null;
+            const label = source.label?.trim() || location || SOURCE_KIND_LABELS[source.kind];
             return (
               <SettingsRow
                 key={id}
                 title={label}
                 description={
                   <span className="break-all">
-                    CLI Proxy{source.enabled ? "" : " · Disabled"}
-                    {label !== source.url ? ` · ${source.url}` : ""}
+                    {SOURCE_KIND_LABELS[source.kind]}
+                    {source.enabled ? "" : " · Disabled"}
+                    {location && label !== location ? ` · ${location}` : ""}
                   </span>
                 }
                 control={

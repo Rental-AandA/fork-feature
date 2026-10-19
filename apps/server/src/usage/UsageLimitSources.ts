@@ -1,13 +1,17 @@
 import {
   DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL,
+  ProviderDriverKind,
   UsageLimitSourceError,
+  type UsageLimitSourceAccount,
   type UsageLimitSourceConsumeResetCreditInput,
   type ProviderConsumeResetCreditResult,
   type ServerSettings,
   type UsageLimitSourceConfig,
   type UsageLimitSourceId,
+  type UsageLimitSourceKind,
   type UsageLimitSourceSnapshot,
 } from "@t3tools/contracts";
+import { makeUnavailableUsageLimits } from "@t3tools/provider-core/server/usageLimits";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -23,6 +27,7 @@ import * as Stream from "effect/Stream";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as Settings from "../serverSettings.ts";
 import { makeCliproxyApi } from "./cliproxyApi.ts";
+import { makeElevenLabsApi } from "./elevenlabsApi.ts";
 
 export class UsageLimitSources extends Context.Service<
   UsageLimitSources,
@@ -36,8 +41,37 @@ export class UsageLimitSources extends Context.Service<
   }
 >()("t3/usage/UsageLimitSources") {}
 
+const CANVA_BILLING_URL = "https://www.canva.com/settings/billing-and-plans";
+
+type SourceReader<K extends UsageLimitSourceKind> = (
+  config: Extract<UsageLimitSourceConfig, { readonly kind: K }>,
+) => Effect.Effect<ReadonlyArray<UsageLimitSourceAccount>, UsageLimitSourceError>;
+
+const missingKey = (detail: string) => Effect.fail(new UsageLimitSourceError({ detail }));
+
+// Canva documents no API for AI credits, so the source only points at its billing page.
+const readCanva: SourceReader<"canva"> = (config) =>
+  DateTime.now.pipe(
+    Effect.map((now) => [
+      {
+        id: config.label ?? "Canva",
+        driver: ProviderDriverKind.make("canva"),
+        usageLimits: {
+          ...makeUnavailableUsageLimits({
+            checkedAt: DateTime.formatIso(now),
+            reason: "unsupported",
+            message: "Canva zeigt KI-Credits nur in der Abrechnung",
+          }),
+          externalUsage: { label: "Canva-Abrechnung", url: CANVA_BILLING_URL },
+        },
+      },
+    ]),
+  );
+
 function sourceLabel(id: string, config: UsageLimitSourceConfig): string {
   if (config.label) return config.label;
+  if (config.kind === "elevenlabs") return "ElevenLabs";
+  if (config.kind === "canva") return "Canva";
   const fallback = id.trim() || "Usage limit source";
   try {
     return new URL(config.url).host || fallback;
@@ -49,6 +83,7 @@ function sourceLabel(id: string, config: UsageLimitSourceConfig): string {
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const api = yield* makeCliproxyApi;
+  const elevenlabs = yield* makeElevenLabsApi;
   const settingsService = yield* Settings.ServerSettingsService;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
   const stateRef = yield* Ref.make<ReadonlyArray<UsageLimitSourceSnapshot>>([]);
@@ -57,16 +92,28 @@ export const make = Effect.gen(function* () {
     PubSub.shutdown,
   );
 
+  const readers: { readonly [K in UsageLimitSourceKind]: SourceReader<K> } = {
+    cliproxy: (config) =>
+      config.managementKey.length === 0
+        ? missingKey("No management key configured.")
+        : api.readAccounts(config),
+    elevenlabs: (config) =>
+      config.apiKey.length === 0
+        ? missingKey("No API key configured.")
+        : elevenlabs.readAccounts(config),
+    canva: readCanva,
+  };
+  const readAccounts = <K extends UsageLimitSourceKind>(
+    config: Extract<UsageLimitSourceConfig, { readonly kind: K }>,
+  ) => (readers[config.kind] as SourceReader<K>)(config);
+
   const readSource = Effect.fn("UsageLimitSources.readSource")(function* (
     id: UsageLimitSourceId,
     config: UsageLimitSourceConfig,
   ) {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     const base = { id, kind: config.kind, label: sourceLabel(id, config), checkedAt } as const;
-    if (config.managementKey.length === 0) {
-      return { ...base, accounts: [], error: "No management key configured." };
-    }
-    const accounts = yield* api.readAccounts(config).pipe(Effect.result);
+    const accounts = yield* readAccounts(config).pipe(Effect.result);
     if (accounts._tag === "Failure") {
       yield* Effect.logDebug("usage limit source read failed", { id, cause: accounts.failure });
       return { ...base, accounts: [], error: accounts.failure.detail };
@@ -110,7 +157,7 @@ export const make = Effect.gen(function* () {
         ),
       );
       const config = settings.usageLimitSources[input.sourceId];
-      if (!config?.enabled || !config.managementKey) {
+      if (!config?.enabled || config.kind !== "cliproxy" || !config.managementKey) {
         return yield* new UsageLimitSourceError({
           detail: "The usage limit source is missing or disabled.",
         });

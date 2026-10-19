@@ -20,6 +20,10 @@ export const ServerProviderUsageWindow = Schema.Struct({
   usedPercent: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
   resetsAt: Schema.optional(IsoDateTime),
   windowDurationMins: Schema.optional(NonNegativeInt),
+  /** Absolute allowance for sources that meter in units (characters, credits), not only percent. */
+  remaining: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
+  limit: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
+  unit: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerProviderUsageWindow = typeof ServerProviderUsageWindow.Type;
 
@@ -78,7 +82,7 @@ export type UsageLimitSourceAccount = typeof UsageLimitSourceAccount.Type;
 
 export const UsageLimitSourceSnapshot = Schema.Struct({
   id: UsageLimitSourceId,
-  kind: Schema.Literal("cliproxy"),
+  kind: Schema.Literals(["cliproxy", "elevenlabs", "canva"]),
   label: TrimmedNonEmptyString,
   checkedAt: IsoDateTime,
   accounts: ForwardCompatibleArray(UsageLimitSourceAccount),

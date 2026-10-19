@@ -12,6 +12,7 @@ import {
   type LimitPoolMember,
   type LimitPoolWindow,
   paceRemainingPercent,
+  remainingAmountLabel,
   remainingPercent,
 } from "@t3tools/shared/usageLimits";
 import { AlertTriangleIcon, ExternalLinkIcon, TicketIcon } from "lucide-react";
@@ -138,6 +139,7 @@ function SegmentPopover({
 }) {
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const remaining = remainingPercent(window);
+  const amount = remainingAmountLabel([window]);
   const timeLeft = paceRemainingPercent(window, now);
   const resetsIn = formatResetsIn(window, now);
   const where =
@@ -173,6 +175,7 @@ function SegmentPopover({
       </div>
       <div className="flex flex-col gap-1 border-t border-border/60 pt-2.5">
         <Row label="Left">{remaining}%</Row>
+        {amount ? <Row label="Amount">{amount}</Row> : null}
         {window.resetsAt ? (
           <Row label="Resets">
             {formatUpcomingTimestamp(window.resetsAt, timestampFormat, now)}
@@ -512,6 +515,7 @@ function PoolWindowCard({
   readonly description?: string | undefined;
 }) {
   const nextRefill = pool.resets.find((reset) => reset.restoresPercent > 0);
+  const amount = remainingAmountLabel(pool.members.map((member) => member.window));
   return (
     <div className="grid items-center gap-x-6 gap-y-3 rounded-lg border border-border/60 p-4 md:grid-cols-[11rem_minmax(0,1fr)]">
       <div className="flex flex-col gap-1">
@@ -525,6 +529,9 @@ function PoolWindowCard({
             {pool.pace ? <PaceIcon pace={pool.pace} /> : null}
           </span>
         </span>
+        {amount ? (
+          <span className="text-xs text-muted-foreground tabular-nums">{amount}</span>
+        ) : null}
         {nextRefill && pool.columns.length > 1 ? (
           <span className="text-xs font-medium text-foreground tabular-nums">
             ↻ +{nextRefill.restoresPercent}%

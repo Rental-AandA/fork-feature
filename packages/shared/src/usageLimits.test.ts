@@ -24,6 +24,7 @@ import {
   paceOf,
   paceRemainingPercent,
   providersWithLimits,
+  remainingAmountLabel,
   remainingPercent,
   usesChatGptSharing,
 } from "./usageLimits.ts";
@@ -1139,6 +1140,74 @@ describe("collectLimitNotices", () => {
       serverConfig: { providers: [], usageLimitSources: [] },
     });
     expect(collectLimitNotices(one)[0]).toBe("Laptop · Claude Max: Could not read limits.");
+  });
+});
+
+describe("usage source credits", () => {
+  const checkedAt = "2026-09-03T11:00:00.000Z";
+
+  it("sums allowances of one unit and refuses partial or mixed sums", () => {
+    const characters = { ...window, remaining: 75_000, limit: 100_000, unit: "characters" };
+    const format = (value: number) => value.toLocaleString();
+    expect(remainingAmountLabel([characters])).toBe(
+      `${format(75_000)} von ${format(100_000)} characters übrig`,
+    );
+    expect(remainingAmountLabel([characters, { ...characters, remaining: 5, limit: 10 }])).toBe(
+      `${format(75_005)} von ${format(100_010)} characters übrig`,
+    );
+    expect(remainingAmountLabel([window])).toBeNull();
+    expect(remainingAmountLabel([characters, { ...characters, unit: "credits" }])).toBeNull();
+    expect(remainingAmountLabel([characters, { ...window, unit: "characters" }])).toBeNull();
+  });
+
+  it("links to a source account's external usage page instead of pooling it", () => {
+    const presentations = new Map([
+      [
+        EnvironmentId.make("env-a"),
+        {
+          entry: { target: { label: "Laptop" } },
+          serverConfig: {
+            providers: [],
+            usageLimitSources: [
+              {
+                id: UsageLimitSourceId.make("canva"),
+                kind: "canva" as const,
+                label: "Canva",
+                checkedAt,
+                accounts: [
+                  {
+                    id: "Canva",
+                    driver: ProviderDriverKind.make("canva"),
+                    usageLimits: {
+                      checkedAt,
+                      windows: [],
+                      unavailable: {
+                        reason: "unsupported" as const,
+                        message: "Nur in der Abrechnung",
+                      },
+                      externalUsage: {
+                        label: "Canva-Abrechnung",
+                        url: "https://canva.test/billing",
+                      },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    expect(collectExternalUsageLinks(presentations)).toEqual([
+      {
+        label: "Canva-Abrechnung",
+        url: "https://canva.test/billing",
+        message: "Nur in der Abrechnung",
+        accounts: ["Canva on Laptop"],
+      },
+    ]);
+    expect(collectLimitAccounts(presentations)).toEqual([]);
+    expect(collectLimitNotices(presentations)).toEqual([]);
   });
 });
 

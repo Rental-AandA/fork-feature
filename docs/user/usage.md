@@ -128,10 +128,16 @@ or endpoint configurations do not report subscription limits.
 API-key accounts may not report subscription limits. This also applies to Claude connections
 using a proxy through `ANTHROPIC_AUTH_TOKEN`.
 
-## Connect a CLIProxyAPI hub
+## Connect a usage source
 
-To see pooled accounts, open **Settings → Providers → Usage providers → Add hub**. Choose the
-environment that will connect to the hub and enter its URL and management key.
+Open **Settings → Providers → Usage providers → Add source** and pick the kind of source. Choose the
+environment that will connect to it; keys stay on that environment.
+
+- **CLIProxyAPI hub**: enter the hub URL and management key to see the accounts it pools.
+- **ElevenLabs**: enter an API key to see this month's characters left and when they reset.
+- **Canva**: Canva has no API for AI credits, so Limits links to Canva billing instead.
+
+### CLIProxyAPI hubs
 
 The accounts appear under **Usage → Limits**. Codex accounts show banked reset credits; select an
 account and choose **Use reset** to redeem one. No hub plugin is required.

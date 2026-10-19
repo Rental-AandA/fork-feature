@@ -1,15 +1,14 @@
 import {
   CommandId,
-  isProviderAvailable,
   MessageId,
   type ModelSelection,
   type OrchestrationV2Command,
   type ProviderInstanceId,
   type ServerProvider,
-  type ServerProviderUsageWindow,
   type UsageRotationDriverSettings,
   type UsageRotationSettings,
 } from "@t3tools/contracts";
+import { pickRotationAccount } from "@t3tools/shared/usageRotation";
 import * as DateTime from "effect/DateTime";
 
 import type { ProjectionLimitFailoverCandidate } from "./ProjectionStore.ts";
@@ -22,56 +21,7 @@ export const isLimitFailoverMessageId = (messageId: string): boolean =>
 /** How long a limit without a reset time keeps its account out of rotation. */
 export const LIMIT_FAILOVER_COOLDOWN_MS = 15 * 60_000;
 
-// Money windows meter spend, not access: an account stays usable at any spend.
-const isMoneyWindow = (window: ServerProviderUsageWindow): boolean =>
-  window.unit !== undefined && /^[A-Z]{3}$/.test(window.unit);
-
-const hasReset = (window: ServerProviderUsageWindow, nowMs: number): boolean =>
-  window.resetsAt !== undefined && Date.parse(window.resetsAt) <= nowMs;
-
-const accessWindows = (provider: ServerProvider): ReadonlyArray<ServerProviderUsageWindow> =>
-  provider.usageLimits?.windows.filter((window) => !isMoneyWindow(window)) ?? [];
-
-/**
- * `unknown` covers accounts that report no windows or whose probe failed: they
- * may still work, so rotation tries them only after every account known to be open.
- */
-export function usageLimitState(
-  provider: ServerProvider,
-  nowMs: number,
-): "limited" | "open" | "unknown" {
-  if (provider.usageLimits === undefined || provider.usageLimits.unavailable !== undefined) {
-    return "unknown";
-  }
-  const windows = accessWindows(provider);
-  if (windows.length === 0) return "unknown";
-  return windows.some((window) => window.usedPercent >= 100 && !hasReset(window, nowMs))
-    ? "limited"
-    : "open";
-}
-
-const earliestWeeklyResetMs = (provider: ServerProvider): number =>
-  Math.min(
-    Infinity,
-    ...accessWindows(provider).flatMap((window) => {
-      if (window.kind !== "weekly" || window.resetsAt === undefined) return [];
-      const resetMs = Date.parse(window.resetsAt);
-      return Number.isFinite(resetMs) ? [resetMs] : [];
-    }),
-  );
-
-const remainingPercent = (provider: ServerProvider): number => {
-  const windows = accessWindows(provider);
-  return windows.length === 0
-    ? -Infinity
-    : 100 - Math.max(...windows.map((window) => window.usedPercent));
-};
-
-/**
- * Only instances listed in the rotation order take part. A new account of the
- * same driver, such as a pay-as-you-go API key, never starts paying for work
- * the user did not route to it.
- */
+/** The account a limited thread on `sourceInstanceId` moves to, or null when none can take it. */
 export function pickFailoverInstance(input: {
   readonly sourceInstanceId: ProviderInstanceId;
   readonly rotation: UsageRotationDriverSettings;
@@ -84,49 +34,15 @@ export function pickFailoverInstance(input: {
 }): ServerProvider | null {
   const source = input.providers.find((provider) => provider.instanceId === input.sourceInstanceId);
   if (source === undefined) return null;
-  const orderIndex = (provider: ServerProvider) =>
-    input.rotation.order.indexOf(provider.instanceId);
-  const eligible = input.providers.flatMap((provider) => {
-    const cooldownUntil = input.cooldowns.get(provider.instanceId);
-    const state = usageLimitState(provider, input.nowMs);
-    return provider.driver === source.driver &&
-      provider.instanceId !== source.instanceId &&
-      orderIndex(provider) !== -1 &&
-      provider.enabled &&
-      input.enabledForThread(provider.instanceId) &&
-      provider.installed &&
-      isProviderAvailable(provider) &&
-      provider.status !== "error" &&
-      provider.status !== "disabled" &&
-      provider.auth.status === "authenticated" &&
-      provider.models.length > 0 &&
-      (cooldownUntil === undefined || cooldownUntil <= input.nowMs) &&
-      state !== "limited"
-      ? [{ provider, known: state === "open" }]
-      : [];
+  return pickRotationAccount({
+    driver: source.driver,
+    rotation: input.rotation,
+    providers: input.providers,
+    nowMs: input.nowMs,
+    excludeInstanceId: source.instanceId,
+    cooldowns: input.cooldowns,
+    enabledForThread: input.enabledForThread,
   });
-  const strategyRank = (provider: ServerProvider): number => {
-    switch (input.rotation.strategy) {
-      case "order":
-        return 0;
-      case "earliest-reset":
-        return earliestWeeklyResetMs(provider);
-      case "most-remaining":
-        return -remainingPercent(provider);
-    }
-  };
-  const ranked = eligible.toSorted(
-    (left, right) =>
-      Number(right.known) - Number(left.known) ||
-      // Infinity - Infinity is NaN; equal ranks fall through to the order.
-      (strategyRank(left.provider) === strategyRank(right.provider)
-        ? 0
-        : strategyRank(left.provider) < strategyRank(right.provider)
-          ? -1
-          : 1) ||
-      orderIndex(left.provider) - orderIndex(right.provider),
-  );
-  return ranked[0]?.provider ?? null;
 }
 
 /** Keeps the model when the target account offers it, otherwise uses the account's default. */

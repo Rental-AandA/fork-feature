@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
 import type { LimitAccount } from "@t3tools/shared/usageLimits";
@@ -17,6 +17,7 @@ import { usePrimaryEnvironmentId } from "../../state/environments";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { providerClients } from "../settings/providerDriverMeta";
+import { rotationHints, type RotationHint } from "./usageRotationHints.logic";
 
 /** Minute clock shared with the rest of the app; countdowns and resets advance with it. */
 export function useUsageNow(): number {
@@ -30,6 +31,31 @@ export function useUsageOverview(now: number) {
 
 export function providerLabel(driver: string): string {
   return providerClients.get(driver as never)?.label ?? driver;
+}
+
+const NO_ROTATION_HINTS: ReadonlyMap<ProviderDriverKind, RotationHint> = new Map();
+
+/** Rotation runs on the thread's server, so its settings and accounts decide the hints. */
+export function useRotationHints(
+  environmentId: EnvironmentId | null,
+  threadInstanceId: ProviderInstanceId | null,
+  now: number,
+): ReadonlyMap<ProviderDriverKind, RotationHint> {
+  const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
+  const config = environmentId === null ? null : presentations.get(environmentId)?.serverConfig;
+  if (!config) return NO_ROTATION_HINTS;
+  return rotationHints({
+    providers: config.providers,
+    rotation: config.settings.usageRotation,
+    threadInstanceId,
+    nowMs: now,
+  });
+}
+
+/** "ChatGPT Pro 20x Subscription" and "plus" read as "ChatGPT Pro 20x" and "Plus". */
+export function planLabel(plan: string): string {
+  const short = plan.replace(/\s+subscription$/i, "").trim();
+  return short.charAt(0).toUpperCase() + short.slice(1);
 }
 
 /** A name safe to show as plain text: emails stay behind the redacting chips. */

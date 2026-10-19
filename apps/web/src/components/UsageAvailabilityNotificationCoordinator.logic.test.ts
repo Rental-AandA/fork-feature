@@ -1,7 +1,10 @@
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { newUsageAvailabilityNotices } from "./UsageAvailabilityNotificationCoordinator.logic";
+import {
+  newUsageAvailabilityNotices,
+  usageNoticeChannel,
+} from "./UsageAvailabilityNotificationCoordinator.logic";
 
 const provider = (
   instanceId: string,
@@ -54,5 +57,30 @@ describe("usage availability notices", () => {
     ]);
     expect(next.notices[1]!.body).toContain("Nothing was redeemed");
     expect(newUsageAvailabilityNotices([provider("2", available)], next.seen).notices).toEqual([]);
+  });
+});
+
+describe("usage notice channel", () => {
+  it("toasts while the user looks at the app, if in-app notifications are on", () => {
+    expect(
+      usageNoticeChannel({ focused: true, inAppNotificationsEnabled: true, desktopAllowed: true }),
+    ).toBe("toast");
+    // No desktop notification for a window the user is looking at.
+    expect(
+      usageNoticeChannel({ focused: true, inAppNotificationsEnabled: false, desktopAllowed: true }),
+    ).toBeNull();
+  });
+
+  it("uses a desktop notification while away only when the notification mode allows it", () => {
+    expect(
+      usageNoticeChannel({ focused: false, inAppNotificationsEnabled: true, desktopAllowed: true }),
+    ).toBe("desktop");
+    expect(
+      usageNoticeChannel({
+        focused: false,
+        inAppNotificationsEnabled: true,
+        desktopAllowed: false,
+      }),
+    ).toBeNull();
   });
 });

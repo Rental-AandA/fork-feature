@@ -367,6 +367,10 @@
       "types": "./src/usageOverview.ts",
       "import": "./src/usageOverview.ts"
     },
+    "./usageRotation": {
+      "types": "./src/usageRotation.ts",
+      "import": "./src/usageRotation.ts"
+    },
     "./desktopAppControl": {
       "types": "./src/desktopAppControl.ts",
       "import": "./src/desktopAppControl.ts"

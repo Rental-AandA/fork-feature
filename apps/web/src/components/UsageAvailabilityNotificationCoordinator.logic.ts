@@ -68,3 +68,20 @@ export function newUsageAvailabilityNotices(
   }
   return { seen: next, notices };
 }
+
+export type UsageNoticeChannel = "toast" | "desktop" | null;
+
+/**
+ * Where a usage notice goes, as for thread notifications: a toast while the user looks at the
+ * app and has in-app notifications on, a desktop notification while they are away and the
+ * notification mode allows it, else nowhere yet.
+ */
+export function usageNoticeChannel(input: {
+  readonly focused: boolean;
+  readonly inAppNotificationsEnabled: boolean;
+  /** The notification mode includes desktop notifications and the browser grants them. */
+  readonly desktopAllowed: boolean;
+}): UsageNoticeChannel {
+  if (input.focused) return input.inAppNotificationsEnabled ? "toast" : null;
+  return input.desktopAllowed ? "desktop" : null;
+}

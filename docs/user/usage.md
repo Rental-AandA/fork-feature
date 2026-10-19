@@ -193,7 +193,8 @@ with **Open usage panel**.
   window that limits the account, when it is full again (countdown and clock time), and whether
   it lasts until the reset at the current pace. The color follows the pace, not the raw
   percentage. **Use now** marks the account in a family whose leftover resets soon, or else the
-  one with the most headroom.
+  one with the most headroom. For a provider with several accounts, the family also says whether
+  rotation is on and which account a limited thread would move to next.
 - **Tools & money** lists usage sources such as fal, Higgsfield, ElevenLabs, OpenRouter, DeepSeek
   and Jev: balances, credits, spend, and how many days a balance lasts at this month's pace.
 - Estimated numbers are marked, numbers older than ten minutes say how old they are, and
@@ -201,7 +202,8 @@ with **Open usage panel**.
 
 **Extras** collects plan perks that end on a date. Banked Codex resets appear on their own; add
 others yourself, such as free generations, with **Add extra**. Swipe or use the arrow keys to
-move through them. You get a reminder three days and one day before an extra ends. The gift
+move through them. You get a reminder three days and one day before an extra ends, using your
+notification settings. The gift
 button next to the context meter in the composer counts extras ending within three days and opens
 the drawer at Extras.
 

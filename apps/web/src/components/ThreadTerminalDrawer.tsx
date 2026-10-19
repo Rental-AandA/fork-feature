@@ -1157,6 +1157,11 @@ export interface ThreadTerminalDrawerView {
   /** The overview, rendered only while it is shown. */
   readonly usage: ReactNode;
   readonly usageActions?: ReactNode;
+  /**
+   * Changing it grows the drawer to show the whole overview, as far as the window allows, such as
+   * when the composer's Extras button asks for the strip at the bottom. Zero asks nothing.
+   */
+  readonly fitRequestId?: number;
 }
 
 function DrawerViewSwitch({ view }: { readonly view: ThreadTerminalDrawerView }) {
@@ -1460,21 +1465,28 @@ export default function ThreadTerminalDrawer({
     Schema.Boolean,
   );
   const controlledDrawerHeight = height;
+  // Each view keeps its own height, so the usage view's size never leaks into the terminals.
+  const heightKey = showingUsage ? `${threadId}:usage` : threadId;
   const [windowMaxDrawerHeight, setWindowMaxDrawerHeight] = useState(maxDrawerHeight);
   const [drawerHeightState, setDrawerHeightState] = useState(() => ({
-    threadId,
+    key: heightKey,
     height: controlledDrawerHeight,
+    from: controlledDrawerHeight,
   }));
-  const preferredDrawerHeight =
-    drawerHeightState.threadId === threadId ? drawerHeightState.height : controlledDrawerHeight;
+  // A new controlled height, such as the usage view's minimum on opening, wins over a local one.
+  const ownsHeight = (state: typeof drawerHeightState) =>
+    state.key === heightKey && state.from === controlledDrawerHeight;
+  const preferredDrawerHeight = ownsHeight(drawerHeightState)
+    ? drawerHeightState.height
+    : controlledDrawerHeight;
   const drawerHeight = clampDrawerHeight(preferredDrawerHeight, windowMaxDrawerHeight);
   const setDrawerHeight = (update: SetStateAction<number>) => {
     setDrawerHeightState((current) => {
-      const currentHeight = current.threadId === threadId ? current.height : controlledDrawerHeight;
+      const currentHeight = ownsHeight(current) ? current.height : controlledDrawerHeight;
       const nextHeight = typeof update === "function" ? update(currentHeight) : update;
-      return nextHeight === currentHeight && current.threadId === threadId
+      return nextHeight === currentHeight && ownsHeight(current)
         ? current
-        : { threadId, height: nextHeight };
+        : { key: heightKey, height: nextHeight, from: controlledDrawerHeight };
     });
   };
   const [resizeEpoch, setResizeEpoch] = useState(0);
@@ -1485,7 +1497,8 @@ export default function ThreadTerminalDrawer({
     if (visible) setWindowMaxDrawerHeight(maxDrawerHeight());
   }
   const drawerHeightRef = useRef(drawerHeight);
-  const lastSyncedHeightRef = useRef({ threadId, height: controlledDrawerHeight });
+  const lastSyncedHeightRef = useRef({ key: heightKey, height: controlledDrawerHeight });
+  const usageBodyRef = useRef<HTMLDivElement>(null);
   const resizeStateRef = useRef<{
     pointerId: number;
     startY: number;
@@ -1674,14 +1687,30 @@ export default function ThreadTerminalDrawer({
 
   const syncHeight = (nextHeight: number) => {
     const lastSynced = lastSyncedHeightRef.current;
-    if (lastSynced.threadId === threadId && lastSynced.height === nextHeight) return;
-    lastSyncedHeightRef.current = { threadId, height: nextHeight };
+    if (lastSynced.key === heightKey && lastSynced.height === nextHeight) return;
+    lastSyncedHeightRef.current = { key: heightKey, height: nextHeight };
     onHeightChange(nextHeight);
   };
 
   useEffect(() => {
-    lastSyncedHeightRef.current = { threadId, height: controlledDrawerHeight };
-  }, [controlledDrawerHeight, threadId]);
+    lastSyncedHeightRef.current = { key: heightKey, height: controlledDrawerHeight };
+  }, [controlledDrawerHeight, heightKey]);
+
+  const fitUsageRequestId = showingUsage ? (viewSwitch.fitRequestId ?? 0) : 0;
+  const fitUsageContent = useEffectEvent(() => {
+    const body = usageBodyRef.current;
+    if (!body) return;
+    const overflow = body.scrollHeight - body.clientHeight;
+    if (overflow <= 0) return;
+    const fitted = clampDrawerHeight(drawerHeight + overflow, windowMaxDrawerHeight);
+    if (fitted <= drawerHeight) return;
+    setDrawerHeight(fitted);
+    syncHeight(fitted);
+  });
+  // Before paint, so the overview appears at its grown height rather than jumping.
+  useLayoutEffect(() => {
+    if (fitUsageRequestId !== 0) fitUsageContent();
+  }, [fitUsageRequestId]);
 
   const handleResizePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -1758,7 +1787,10 @@ export default function ThreadTerminalDrawer({
   useEffect(() => () => syncPreferredHeight(), []);
 
   const usageBody = showingUsage ? (
-    <div className="min-h-0 w-full flex-1 overflow-y-auto overscroll-contain px-3 py-2.5">
+    <div
+      ref={usageBodyRef}
+      className="min-h-0 w-full flex-1 overflow-y-auto overscroll-contain px-3 py-2.5"
+    >
       {viewSwitch.usage}
     </div>
   ) : null;
